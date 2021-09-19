@@ -344,15 +344,15 @@ def main(mode, hostport, *args):
     if mode == 'server':
         SaltyServer(hostport, **opts).serve_forever()
     elif mode == 'client':
+        # --id=host1 --path=tmp/host1
         SaltyClient(hostport, **opts).serve_forever()
     elif mode == 'cli':
         msg = {}
+        # type=apply roles=foo,bar target=host1
         for arg in args:
             if not arg[0] == '-':
                 k, v = arg.split('=', 1)
-                if ',' in v:
-                    v = v.split(',')
-                msg[k] = v
+                msg[k] = v.split(',') if ',' in v else v
 
         result = SaltyClient(hostport, **opts).run(msg)
         for host, roles in result['results'].items():
