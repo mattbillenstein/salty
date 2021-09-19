@@ -1,0 +1,3 @@
+#!/bin/bash
+
+../salty.py cli 127.0.0.1:11111 type=apply -v $*
