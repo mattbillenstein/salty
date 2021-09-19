@@ -368,7 +368,7 @@ def main(mode, hostport, *args):
                         output = result.pop('output', None)
                         print(f'  {result}')
                         if output and verbose > 1:
-                            print(f'{output.rstrip()}\n  ===========================')
+                            print(output.rstrip())
 
     return 0
 
