@@ -197,7 +197,10 @@ class SaltyClient(Reactor):
         assert r.ok, r.text
         facts['public_ip'] = r.text.strip()
 
-        p = subprocess.run(['hostname', '-I'], capture_output=True)
+        cmd = ['hostname', '-I']
+        if sys.platform == 'darwin':
+            cmd = ['ipconfig', 'getifaddr', 'en0']
+        p = subprocess.run(cmd, capture_output=True)
         assert p.returncode == 0, p
         facts['ip'] = p.stdout.decode('utf8').strip().split()[0]
 
