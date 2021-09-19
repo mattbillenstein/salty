@@ -143,27 +143,41 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
             exec(f.read(), meta)
             meta.pop('__builtins__')
 
-        target = msg.get('target', '*')
-        for id, sock in self.clients.items():
+        target = msg.get('target')
+
+        for id, q2 in self.clients.items():
             if id not in meta:
                 print('Apply missing host {id} in metadata')
                 continue
 
-            # FIXME, regex match?
             for role in meta[id]['roles']:
+                # FIXME, regex and meta matching?
+                if target and not id.startswith(target):
+                    results[id][role] = {'results': [{'rc': 0, 'cmd': '...skipped...', 'elapsed': 0.0}], 'elapsed': 0.0}
+                    continue
+
                 with open(f'roles/{role}.py') as f:
                     content = f.read()
-                result = self.do_rpc(sock, {'type': 'run', 'content': content, 'context': {'id': id, 'role': role, 'meta': meta, 'facts': self.facts}})
-                results[id][role] = result['result']
+                msg = {'type': 'run', 'content': content, 'context': {'id': id, 'role': role, 'meta': meta, 'facts': self.facts}}
+                results[id][role] = gevent.spawn(self.do_rpc, q2, msg)
+
+        for id, d in results.items():
+            for role, g in d.items():
+                if not isinstance(g, dict):
+                    print(id, role, g)
+                    result = g.get()
+                    print(f'Result: {result}')
+                    d[role] = result['result']
 
         self.send_msg(q, {'type': 'apply_result', 'results': results})
 
 class SaltyClient(Reactor):
-    def __init__(self, addr, id, keyfile, certfile):
-        self.id = id
+    def __init__(self, addr, id, keyfile, certfile, path=''):
         self.addr = addr
+        self.id = id
         self.keyfile = keyfile
         self.certfile = certfile
+        self.path = path
         self.futures = {}
 
     def connect(self):
@@ -201,7 +215,7 @@ class SaltyClient(Reactor):
             result = {'cmd': f'copy({src}, {dst})', 'rc': 0, 'changed': False}
             results.append(result)
             try:
-                dst = 'fs' + dst
+                dst = self.path + dst
                 hash = hash_file(dst)
                 res = self.get_file(q, src, hash=hash)
 
@@ -228,7 +242,7 @@ class SaltyClient(Reactor):
             results.append(result)
 
             try:
-                dst = 'fs' + dst
+                dst = self.path + dst
                 hash = hash_file(dst)
                 res = self.get_file(q, src, hash=hash)
 
@@ -269,7 +283,12 @@ class SaltyClient(Reactor):
 
         g = {'copy': copy, 'render': render, 'shell': shell, 'print': capture_print}
         content = msg.pop('content')
-        exec(content, g)
+        try:
+            exec(content, g)
+        except Exception as e:
+            result = {'cmd': f'error in exec', 'rc': 1, 'changed': True}
+            result['error'] = traceback.format_exc()
+            results.append(result)
 
         msg['type'] = 'future'
         msg['result'] = {'results': results, 'output': '\n'.join(output), 'elapsed': time.time() - start}
@@ -312,14 +331,17 @@ def main(mode, hostport, *args):
         SaltyServer(hostport, keyfile='key.pem', certfile='cert.pem').serve_forever()
     elif mode == 'client':
         id = args[0]
-        SaltyClient(hostport, id, keyfile='key.pem', certfile='cert.pem').serve_forever()
+        path = ''
+        if len(args) > 1:
+            path = args[1]
+        SaltyClient(hostport, id, keyfile='key.pem', certfile='cert.pem', path=path).serve_forever()
     elif mode == 'cli':
         msg = json.loads(args[0])
         result = SaltyClient(hostport, None, keyfile='key.pem', certfile='cert.pem').run(msg)
         for host, roles in result['results'].items():
             for role, cmds in roles.items():
                 print(f'host:{host} role:{role} elapsed:{cmds["elapsed"]:.3f}')
-                if cmds['output'] and ('-v' in args or '-vv' in args):
+                if cmds.get('output') and ('-v' in args or '-vv' in args):
                     print(f'  Output:\n{cmds["output"]}')
                 for result in cmds['results']:
                     if result['rc'] or result.get('error') or '-v' in args or '-vv' in args:
