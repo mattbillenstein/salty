@@ -166,29 +166,24 @@ class SaltyClient(Reactor):
         self.certfile = certfile
         self.futures = {}
 
-    def _connect(self):
+    def connect(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock = ssl.wrap_socket(
-            sock,
-            keyfile=self.keyfile,
-            certfile=self.certfile,
-        )
+        sock = ssl.wrap_socket(sock, keyfile=self.keyfile, certfile=self.certfile)
         sock.connect(self.addr)
         return sock
 
     def get_facts(self):
-        d = {}
+        facts = {}
 
         r = requests.get('https://vazor.com/ip')
         assert r.ok, r.text
-        d['public_ip'] = r.text.strip()
+        facts['public_ip'] = r.text.strip()
 
         p = subprocess.run(['hostname', '-I'], capture_output=True)
         assert p.returncode == 0, p
-        d['ip'] = p.stdout.decode('utf8').strip().split()[0]
+        facts['ip'] = p.stdout.decode('utf8').strip().split()[0]
 
-        return d
+        return facts
 
     def handle_pong(self, msg, q):
         pass
@@ -202,6 +197,7 @@ class SaltyClient(Reactor):
         context['id'] = self.id
 
         def copy(src, dst):
+            start = time.time()
             result = {'cmd': f'copy({src}, {dst})', 'rc': 0, 'changed': False}
             results.append(result)
             try:
@@ -223,9 +219,11 @@ class SaltyClient(Reactor):
                 result['error'] = traceback.format_exc()
                 result['changed'] = True
 
+            result['elapsed'] = time.time() - start
             return result
 
         def render(src, dst):
+            start = time.time()
             result = {'cmd': f'render({src}, {dst})', 'rc': 0, 'changed': False}
             results.append(result)
 
@@ -252,14 +250,17 @@ class SaltyClient(Reactor):
                 result['error'] = traceback.format_exc()
                 result['changed'] = True
 
+            result['elapsed'] = time.time() - start
             return result
 
         def shell(cmds):
+            start = time.time()
             result = {'cmd': f'shell({cmds})', 'rc': 0, 'changed': True}
             results.append(result)
             p = subprocess.run(cmds, shell=True, capture_output=True)
             result['rc'] = p.returncode
             result['output'] = p.stdout.decode('utf8') + '\n' + p.stderr.decode('utf8')
+            result['elapsed'] = time.time() - start
             return result
 
         output = []
@@ -281,18 +282,26 @@ class SaltyClient(Reactor):
 
     def serve_forever(self):
         while 1:
-            sock = self._connect()
-            g = gevent.spawn(self.handle, sock, self.addr)
+            try:
+                g = None
+                sock = self.connect()
+                g = gevent.spawn(self.handle, sock, self.addr)
 
-            self.send_msg(sock, {'type': 'identify', 'id': self.id, 'facts': self.get_facts()})
-            while 1:
-                self.send_msg(sock, {'type': 'ping'})
-                time.sleep(5)
-
-            g.join()
+                self.send_msg(sock, {'type': 'identify', 'id': self.id, 'facts': self.get_facts()})
+                while 1:
+                    self.send_msg(sock, {'type': 'ping'})
+                    time.sleep(5)
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                print(f'Exception in client serve: {traceback.format_exc()}')
+                time.sleep(3)
+            finally:
+                if g:
+                    g.kill()
 
     def run(self, msg):
-        sock = self._connect()
+        sock = self.connect()
         self.send_msg(sock, msg)
         return self.recv_msg(sock)
 
@@ -309,12 +318,16 @@ def main(mode, hostport, *args):
         result = SaltyClient(hostport, None, keyfile='key.pem', certfile='cert.pem').run(msg)
         for host, roles in result['results'].items():
             for role, cmds in roles.items():
-                print(f'host:{host} role:{role} elapsed:{cmds["elapsed"]:.3}')
-                if cmds['output']:
+                print(f'host:{host} role:{role} elapsed:{cmds["elapsed"]:.3f}')
+                if cmds['output'] and ('-v' in args or '-vv' in args):
                     print(f'  Output:\n{cmds["output"]}')
                 for result in cmds['results']:
-                    if result['rc'] or result.get('error'):
+                    if result['rc'] or result.get('error') or '-v' in args or '-vv' in args:
+                        output = result.pop('output', None)
                         print(f'  {result}')
+                        if output and '-vv' in args:
+                            print(f'{output.rstrip()}\n  ===========================')
+
     return 0
 
 if __name__ == '__main__':
