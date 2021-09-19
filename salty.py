@@ -38,6 +38,9 @@ def hash_file(path):
             return hash_data(f.read())
     return None
 
+def elapsed(start):
+    return round(time.time() - start, 6)
+
 class Reactor(object):
 
     def do_rpc(self, sock, msg):
@@ -110,7 +113,6 @@ class Reactor(object):
 
 class SaltyServer(gevent.server.StreamServer, Reactor):
     def __init__(self, *args, **kwargs):
-        self.id = 'server'
         self.clients = {}
         self.facts = {}
         self.futures = {}
@@ -144,6 +146,7 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
             meta.pop('__builtins__')
 
         target = msg.get('target')
+        roles = msg.get('roles')
 
         for id, q2 in self.clients.items():
             if id not in meta:
@@ -151,9 +154,13 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
                 continue
 
             for role in meta[id]['roles']:
+                if roles and role not in roles:
+                    results[id][role] = {'results': [{'rc': 0, 'cmd': '...role skipped...', 'elapsed': 0.0}], 'elapsed': 0.0}
+                    continue
+
                 # FIXME, regex and meta matching?
                 if target and not id.startswith(target):
-                    results[id][role] = {'results': [{'rc': 0, 'cmd': '...skipped...', 'elapsed': 0.0}], 'elapsed': 0.0}
+                    results[id][role] = {'results': [{'rc': 0, 'cmd': '...host skipped...', 'elapsed': 0.0}], 'elapsed': 0.0}
                     continue
 
                 with open(f'roles/{role}.py') as f:
@@ -169,7 +176,7 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
         self.send_msg(q, {'type': 'apply_result', 'results': results})
 
 class SaltyClient(Reactor):
-    def __init__(self, addr, id, keyfile, certfile, path=''):
+    def __init__(self, addr, keyfile='key.pem', certfile='cert.pem', id=None, path=None):
         self.addr = addr
         self.id = id
         self.keyfile = keyfile
@@ -230,7 +237,7 @@ class SaltyClient(Reactor):
                 result['error'] = traceback.format_exc()
                 result['changed'] = True
 
-            result['elapsed'] = time.time() - start
+            result['elapsed'] = elapsed(start)
             return result
 
         def render(src, dst):
@@ -261,7 +268,7 @@ class SaltyClient(Reactor):
                 result['error'] = traceback.format_exc()
                 result['changed'] = True
 
-            result['elapsed'] = time.time() - start
+            result['elapsed'] = elapsed(start)
             return result
 
         def shell(cmds):
@@ -271,7 +278,7 @@ class SaltyClient(Reactor):
             p = subprocess.run(cmds, shell=True, capture_output=True)
             result['rc'] = p.returncode
             result['output'] = p.stdout.decode('utf8') + '\n' + p.stderr.decode('utf8')
-            result['elapsed'] = time.time() - start
+            result['elapsed'] = elapsed(start)
             return result
 
         output = []
@@ -288,7 +295,7 @@ class SaltyClient(Reactor):
             results.append(result)
 
         msg['type'] = 'future'
-        msg['result'] = {'results': results, 'output': '\n'.join(output), 'elapsed': time.time() - start}
+        msg['result'] = {'results': results, 'output': '\n'.join(output), 'elapsed': elapsed(start)}
         self.send_msg(q, msg)
 
     def get_file(self, sock, path, **opts):
@@ -324,27 +331,40 @@ class SaltyClient(Reactor):
 def main(mode, hostport, *args):
     hostport = hostport.split(':')
     hostport = (hostport[0], int(hostport[1]))
+
+    verbose = 0
+    opts = dict(keyfile='key.pem', certfile='cert.pem')
+    for arg in args:
+        if arg.startswith('-v'):
+            verbose = arg.count('v')
+        elif arg.startswith('--'):
+            k, v = arg[2:].split('=', 1)
+            opts[k] = v
+
     if mode == 'server':
-        SaltyServer(hostport, keyfile='key.pem', certfile='cert.pem').serve_forever()
+        SaltyServer(hostport, **opts).serve_forever()
     elif mode == 'client':
-        id = args[0]
-        path = ''
-        if len(args) > 1:
-            path = args[1]
-        SaltyClient(hostport, id, keyfile='key.pem', certfile='cert.pem', path=path).serve_forever()
+        SaltyClient(hostport, **opts).serve_forever()
     elif mode == 'cli':
-        msg = json.loads(args[0])
-        result = SaltyClient(hostport, None, keyfile='key.pem', certfile='cert.pem').run(msg)
+        msg = {}
+        for arg in args:
+            if not arg[0] == '-':
+                k, v = arg.split('=', 1)
+                if ',' in v:
+                    v = v.split(',')
+                msg[k] = v
+
+        result = SaltyClient(hostport, **opts).run(msg)
         for host, roles in result['results'].items():
             for role, cmds in roles.items():
-                print(f'host:{host} role:{role} elapsed:{cmds["elapsed"]:.3f}')
-                if cmds.get('output') and ('-v' in args or '-vv' in args):
+                print(f'host:{host} role:{role} elapsed:{cmds["elapsed"]}')
+                if cmds.get('output') and verbose > 0:
                     print(f'  Output:\n{cmds["output"]}')
                 for result in cmds['results']:
-                    if result['rc'] or result.get('error') or '-v' in args or '-vv' in args:
+                    if result['rc'] or result.get('error') or verbose > 0:
                         output = result.pop('output', None)
                         print(f'  {result}')
-                        if output and '-vv' in args:
+                        if output and verbose > 1:
                             print(f'{output.rstrip()}\n  ===========================')
 
     return 0
