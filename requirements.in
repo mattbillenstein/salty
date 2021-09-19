@@ -2,3 +2,4 @@ gevent
 mako
 msgpack
 pip-tools
+requests

@@ -4,12 +4,18 @@
 #
 #    pip-compile requirements.in
 #
+certifi==2021.5.30
+    # via requests
+charset-normalizer==2.0.6
+    # via requests
 click==8.0.1
     # via pip-tools
 gevent==21.8.0
     # via -r requirements.in
 greenlet==1.1.1
     # via gevent
+idna==3.2
+    # via requests
 mako==1.1.5
     # via -r requirements.in
 markupsafe==2.0.1
@@ -20,8 +26,12 @@ pep517==0.11.0
     # via pip-tools
 pip-tools==6.2.0
     # via -r requirements.in
+requests==2.26.0
+    # via -r requirements.in
 tomli==1.2.1
     # via pep517
+urllib3==1.26.6
+    # via requests
 wheel==0.37.0
     # via pip-tools
 zope.event==4.5.0
