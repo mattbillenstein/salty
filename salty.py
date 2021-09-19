@@ -164,10 +164,7 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
         for id, d in results.items():
             for role, g in d.items():
                 if not isinstance(g, dict):
-                    print(id, role, g)
-                    result = g.get()
-                    print(f'Result: {result}')
-                    d[role] = result['result']
+                    d[role] = g.get()['result']
 
         self.send_msg(q, {'type': 'apply_result', 'results': results})
 
