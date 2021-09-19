@@ -1,3 +1,4 @@
 #!/bin/bash
 
+source ve/bin/activate
 ../salty.py client 127.0.0.1:11111 --id=server1 --path=tmp/server1
