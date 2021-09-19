@@ -243,7 +243,7 @@ class SaltyClient(Reactor):
             result['elapsed'] = elapsed(start)
             return result
 
-        def render(src, dst):
+        def render(src, dst, **kw):
             start = time.time()
             result = {'cmd': f'render({src}, {dst})', 'rc': 0, 'changed': False}
             results.append(result)
@@ -254,7 +254,7 @@ class SaltyClient(Reactor):
                 res = self.get_file(q, src, hash=hash)
 
                 template = res['data'].decode('utf8')
-                data = Template(template).render(**context).encode('utf8')
+                data = Template(template).render(**context, **kw).encode('utf8')
                 hash_new = hash_data(data)
 
                 if hash_new != hash:
