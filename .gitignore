@@ -1,3 +1,6 @@
 *.pem
 *.pyc
 ve
+
+# vim
+*.swp
