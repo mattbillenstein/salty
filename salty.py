@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import os.path
+import re
 import socket
 import ssl
 import struct
@@ -91,9 +92,10 @@ class Reactor(object):
         q = Queue()
         g = gevent.spawn(self._writer, sock, q)
         try:
+            fh = sock.makefile(mode='b')
             while 1:
                 try:
-                    msg = self.recv_msg(sock)
+                    msg = self.recv_msg(fh)
                     if not msg:
                         print(f'Connection disconnected {addr[0]}:{addr[1]}')
                         break
@@ -147,6 +149,7 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
 
         target = msg.get('target')
         roles = msg.get('roles')
+        context = {k: v for k, v in msg.items() if k not in ('type', 'target', 'roles')}
 
         for id, q2 in self.clients.items():
             if id not in meta:
@@ -165,7 +168,9 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
 
                 with open(f'roles/{role}.py') as f:
                     content = f.read()
-                msg = {'type': 'run', 'content': content, 'context': {'id': id, 'role': role, 'meta': meta, 'facts': self.facts}}
+                ctx = {'id': id, 'role': role, 'meta': meta, 'facts': self.facts}
+                ctx.update(context)
+                msg = {'type': 'run', 'content': content, 'context': ctx}
                 results[id][role] = gevent.spawn(self.do_rpc, q2, msg)
 
         for id, d in results.items():
@@ -349,13 +354,39 @@ def main(mode, hostport, *args):
     elif mode == 'client':
         # --id=host1 --path=tmp/host1
         SaltyClient(hostport, **opts).serve_forever()
-    elif mode == 'cli':
+    elif mode in ('cli', 'bootstrap'):
+        if mode == 'bootstrap':
+            server_opts = {k: v for k, v in opts.items() if k in ('certfile', 'keyfile')}
+            server = SaltyServer(hostport, **server_opts)
+            server.start()
+            client = SaltyClient(hostport, **opts)
+            client_serve = gevent.spawn(client.serve_forever)
+
+            # wait for client to connect
+            while not server.clients:
+                time.sleep(0.1)
+
+            args = ['type=apply', 'bootstrap=true']
+
         msg = {}
         # type=apply roles=foo,bar target=host1
         for arg in args:
             if not arg[0] == '-':
                 k, v = arg.split('=', 1)
-                msg[k] = v.split(',') if ',' in v else v
+
+                # list of string
+                v = v.split(',') if ',' in v else v
+
+                if v.lower() == 'true':
+                    v = True
+                elif v.lower() == 'false':
+                    v = False
+                elif re.match('^[0-9]+$', v):
+                    v = int(v)
+                elif re.match('^[0-9]+\.[0-9]+$', v):
+                    v = float(v)
+
+                msg[k] = v
 
         result = SaltyClient(hostport, **opts).run(msg)
         for host, roles in result['results'].items():
@@ -369,6 +400,10 @@ def main(mode, hostport, *args):
                         print(f'  {result}')
                         if output and verbose > 1:
                             print(output.rstrip())
+
+        if mode == 'bootstrap':
+            client_serve.kill()
+            server.stop()
 
     return 0
 
