@@ -1,5 +1,6 @@
 gevent
 mako
 msgpack
+pynacl
 pip-tools
 requests

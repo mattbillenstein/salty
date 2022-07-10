@@ -27,6 +27,8 @@ import requests
 from gevent.event import AsyncResult
 from mako.template import Template
 
+import crypto
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -118,6 +120,12 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
         self.clients = {}
         self.facts = {}
         self.futures = {}
+
+        self.crypto_pass = None
+        if os.path.exists('crypto.pass'):
+            with open('crypto.pass') as f:
+                self.crypto_pass = f.read().strip()
+
         super().__init__(*args, **kwargs)
 
     def handle_ping(self, msg, q):
@@ -125,8 +133,15 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
 
     def handle_get_file(self, msg, q):
         path = os.path.join('files', msg['path'])
+
+        if os.path.exists(path + '.enc'):
+            path += '.enc'
+
         with open(path, 'rb') as f:
             data = f.read()
+
+        if path.endswith('.enc'):
+            data = crypto.decrypt(data, self.crypto_pass)
 
         msg['type'] = 'future'
 
@@ -143,9 +158,12 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
 
         # apply roles to target servers
         meta = {}
-        with open('meta/servers.py') as f:
-            exec(f.read(), meta)
-            meta.pop('__builtins__')
+        for fname in ('servers', 'secrets'):
+            with open(f'meta/{fname}.py') as f:
+                exec(f.read(), meta)
+        meta.pop('__builtins__')
+
+        crypto.decrypt_dict(meta, self.crypto_pass)
 
         target = msg.get('target')
         roles = msg.get('roles')
