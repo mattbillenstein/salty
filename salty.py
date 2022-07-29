@@ -3,13 +3,17 @@
 import gevent.monkey
 gevent.monkey.patch_all()
 
+import fnmatch
 import hashlib
 import json
 import os
 import os.path
+import platform
 import re
+import shutil
 import socket
 import ssl
+import stat
 import struct
 import subprocess
 import sys
@@ -22,15 +26,31 @@ from pprint import pprint
 
 import gevent
 import gevent.server
+import mako.exceptions
+import mako.template
 import msgpack
 import requests
 from gevent.event import AsyncResult
-from mako.template import Template
 
 import crypto
+from compat import grp, pwd, useradd_command, get_ip_addresses
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+# convenience imports used in roles and mako
+IMPORTS = [
+    'import os',
+    'import os.path',
+    'import json',
+]
 
+_print = print
+def print(*args):
+    _print(*args)
+    sys.stdout.flush()
+
+def print_error(*args):
+    if sys.stdout.isatty():
+        args = [f'\033[1;31m{_}\033[0m' for _ in args]
+    print(*args)
 
 def hash_data(data):
     return hashlib.sha1(data).hexdigest()
@@ -103,6 +123,7 @@ class Reactor(object):
                         break
                     if msg['type'] == 'identify':
                         client_id = msg['id']
+                        print(f'id:{client_id} facts:{msg["facts"]}')
                         self.clients[client_id] = q
                         self.facts[client_id] = msg['facts']
                     else:
@@ -120,10 +141,14 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
         self.clients = {}
         self.facts = {}
         self.futures = {}
+        self.fileroot = kwargs.pop('fileroot', os.getcwd())
+        self.keyroot = kwargs.pop('keyroot', os.getcwd())
 
         self.crypto_pass = None
-        if os.path.exists('crypto.pass'):
-            with open('crypto.pass') as f:
+
+        fname = os.path.join(self.keyroot, 'crypto.pass')
+        if os.path.exists(fname):
+            with open(fname) as f:
                 self.crypto_pass = f.read().strip()
 
         super().__init__(*args, **kwargs)
@@ -132,100 +157,147 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
         self.send_msg(q, {'type': 'pong'})
 
     def handle_get_file(self, msg, q):
-        path = os.path.join('files', msg['path'])
+        path = os.path.join(self.fileroot, 'files', msg['path'])
 
         if os.path.exists(path + '.enc'):
             path += '.enc'
 
-        with open(path, 'rb') as f:
-            data = f.read()
-
-        if path.endswith('.enc'):
-            data = crypto.decrypt(data, self.crypto_pass)
-
         msg['type'] = 'future'
 
-        hash = hash_data(data)
-        if msg.get('hash') != hash:
-            msg['data'] = data
-            msg['hash'] = hash
+        try:
+            with open(path, 'rb') as f:
+                data = f.read()
 
-        msg['mode'] = os.stat(path).st_mode & 0o777
+            if path.endswith('.enc'):
+                data = crypto.decrypt(data, self.crypto_pass)
+
+            hash = hash_data(data)
+            if msg.get('hash') != hash:
+                msg['data'] = data
+                msg['hash'] = hash
+
+            msg['mode'] = os.stat(path).st_mode & 0o777
+        except Exception:
+            msg['error'] = traceback.format_exc()
+
         self.send_msg(q, msg)
 
     def handle_apply(self, msg, q):
+        start = time.time()
         results = defaultdict(dict)
 
         # apply roles to target servers
         meta = {}
-        for fname in ('servers', 'secrets'):
-            with open(f'meta/{fname}.py') as f:
-                exec(f.read(), meta)
-        meta.pop('__builtins__')
+        for fname in ('hosts', 'envs', 'clusters'):
+            with open(os.path.join(self.fileroot, 'meta', f'{fname}.py')) as f:
+                meta[fname] = {}
+                exec(f.read(), meta[fname])
+                for k in list(meta[fname]):
+                    if k.startswith('_'):
+                        meta[fname].pop(k)
+
+        # unwind cluster -> id in hosts and apply facts/envs/clusters
+        hosts = {}
+        for cluster, servers in meta['hosts'].items():
+            for id, v in servers.items():
+                # skip disconnected / non-existing hosts
+                if id not in self.facts:
+                    continue
+
+                v['cluster'] = cluster
+                v['facts'] = self.facts[id]
+                v['vars'] = meta['envs'][v['env']]
+                v['vars'].update(meta['clusters'][cluster])
+                hosts[id] = v
+
+        target = msg.get('target')
+        target_cluster = None
+        if target and target.startswith('cluster:'):
+            target_cluster = target.split(':')[1]
+            target = None
 
         crypto.decrypt_dict(meta, self.crypto_pass)
 
-        target = msg.get('target')
-        roles = msg.get('roles')
-        context = {k: v for k, v in msg.items() if k not in ('type', 'target', 'roles')}
+        # roles to apply, if empty, apply all host roles
+        roles = msg.get('roles', [])
+        # roles to skip unless given explictely
+        skip = [_ for _ in msg.get('skip', []) if _ not in roles]
+
+        context = {k: v for k, v in msg.items() if k not in ('type', 'target', 'roles', 'skip')}
 
         for id, q2 in self.clients.items():
-            if id not in meta:
-                print('Apply missing host {id} in metadata')
+            if id not in hosts:
+                print(f'Apply missing host {id} in metadata')
                 continue
 
-            for role in meta[id]['roles']:
-                if roles and role not in roles:
-                    results[id][role] = {'results': [{'rc': 0, 'cmd': '...role skipped...', 'elapsed': 0.0}], 'elapsed': 0.0}
+            if target_cluster and hosts[id]['cluster'] != target_cluster:
+                continue
+
+            for role in hosts[id]['roles']:
+                if not os.path.isfile(os.path.join(self.fileroot, 'roles', f'{role}.py')):
+                    # roles are sometimes just tags, just silently ignore
+                    # missing role .py files
+                    # results[id][role] = {'results': [{'rc': 1, 'cmd': '...role missing...', 'elapsed': 0.0}], 'elapsed': 0.0}
                     continue
 
-                # FIXME, regex and meta matching?
-                if target and not id.startswith(target):
-                    results[id][role] = {'results': [{'rc': 0, 'cmd': '...host skipped...', 'elapsed': 0.0}], 'elapsed': 0.0}
+                if (roles and role not in roles) or role in skip:
+                    results[id][role] = {'results': [{'rc': 0, 'cmd': '...role skipped...', 'elapsed': 0.0, 'changed': False}], 'elapsed': 0.0}
                     continue
 
-                with open(f'roles/{role}.py') as f:
+                # target here can be glob by id (p-*.foo.dev)
+                if target and not fnmatch.fnmatch(id, target):
+                    results[id][role] = {'results': [{'rc': 0, 'cmd': '...host skipped...', 'elapsed': 0.0, 'changed': False}], 'elapsed': 0.0}
+                    continue
+
+                with open(os.path.join(self.fileroot, 'roles', f'{role}.py')) as f:
                     content = f.read()
-                ctx = {'id': id, 'role': role, 'meta': meta, 'facts': self.facts}
+
+                ctx = {'id': id, 'role': role, 'hosts': hosts, 'me': hosts[id], 'bootstrap': False}
                 ctx.update(context)
                 msg = {'type': 'run', 'content': content, 'context': ctx}
-                results[id][role] = gevent.spawn(self.do_rpc, q2, msg)
+                results[id][role] = (q2, msg)
 
-        for id, d in results.items():
-            for role, g in d.items():
-                if not isinstance(g, dict):
-                    d[role] = g.get()['result']
+        # scatter by host, then collect - roles must be run sequentially
+        def dispatch(host_roles):
+            for role, tup in list(host_roles.items()):
+                if not isinstance(tup, dict):
+                    host_roles[role] = self.do_rpc(*tup)['result']
 
-        self.send_msg(q, {'type': 'apply_result', 'results': results})
+        greenlets = []
+        for id, host_roles in results.items():
+            g = gevent.spawn(dispatch, host_roles)
+            greenlets.append(g)
+
+        gevent.wait(greenlets)
+
+        self.send_msg(q, {'type': 'apply_result', 'results': results, 'elapsed': elapsed(start)})
 
 class SaltyClient(Reactor):
-    def __init__(self, addr, keyfile='key.pem', certfile='cert.pem', id=None, path=None):
+    def __init__(self, addr, keyroot=os.getcwd(), id=None, path=''):
         self.addr = addr
         self.id = id
-        self.keyfile = keyfile
-        self.certfile = certfile
+        self.keyroot = keyroot
         self.path = path
         self.futures = {}
 
     def connect(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock = ssl.wrap_socket(sock, keyfile=self.keyfile, certfile=self.certfile)
+        sock = ssl.wrap_socket(
+            sock,
+            keyfile=os.path.join(self.keyroot, 'key.pem'),
+            certfile=os.path.join(self.certfile, 'cert.pem'),
+        )
         sock.connect(self.addr)
         return sock
 
     def get_facts(self):
         facts = {}
 
-        r = requests.get('https://vazor.com/ip')
-        assert r.ok, r.text
-        facts['public_ip'] = r.text.strip()
+        facts.update(get_ip_addresses())
 
-        cmd = ['hostname', '-I']
-        if sys.platform == 'darwin':
-            cmd = ['ipconfig', 'getifaddr', 'en0']
-        p = subprocess.run(cmd, capture_output=True)
-        assert p.returncode == 0, p
-        facts['ip'] = p.stdout.decode('utf8').strip().split()[0]
+        uname = platform.uname()
+        facts['kernel'] = uname.system
+        facts['machine'] = uname.machine
 
         return facts
 
@@ -237,17 +309,75 @@ class SaltyClient(Reactor):
         start = time.time()
         results = []
 
-        context = msg['context']
-        context['id'] = self.id
+        def get_ips(role, key='private_ip'):
+            # return ip addresses of hosts serving the role in the same
+            # cluster...
+            ips = []
+            cluster = context['me']['cluster']
+            if cluster == 'local':
+                return ['127.0.0.1']
+            for id, h in context['hosts'].items():
+                if h['cluster'] == cluster and role in h['roles']:
+                    ips.append(h['facts'][key])
+            ips.sort()
+            return ips
 
-        def copy(src, dst):
+        context = dict(msg['context'])
+        context['get_ips'] = get_ips
+
+        def _set_user_and_mode(path, user='root', mode=None):
+            changed = False
+            
+            st = os.stat(path)
+
+            if mode is None:
+                mode = 0o644
+                if stat.S_ISDIR(st.st_mode):
+                    mode = 0o755
+
+            if st.st_mode & 0o777 != mode:
+                os.chmod(path, mode)
+                changed = True
+
+            u = pwd.getpwnam(user)
+            if st.st_uid != u.pw_uid or st.st_gid != u.pw_gid:
+                os.chown(path, u.pw_uid, u.pw_gid)
+                changed = True
+
+            return changed
+
+        def makedirs(path, user='root', mode=0o755):
+            start = time.time()
+            result = {'cmd': f'makedirs({path}, {user}, 0o{mode:o})', 'rc': 0, 'changed': False, 'created': False}
+            results.append(result)
+            try:
+                path = self.path + path
+
+                if not os.path.isdir(path):
+                    os.makedirs(path, mode=mode)
+                    result['created'] = True
+                    result['changed'] = True
+
+                if _set_user_and_mode(path, user, mode):
+                    result['changed'] = True
+            except Exception as e:
+                result['rc'] = 1
+                result['error'] = traceback.format_exc()
+
+            result['elapsed'] = elapsed(start)
+            return result
+
+        def copy(src, dst, user='root', mode=0o644):
             start = time.time()
             result = {'cmd': f'copy({src}, {dst})', 'rc': 0, 'changed': False}
             results.append(result)
             try:
                 dst = self.path + dst
                 hash = hash_file(dst)
+                result['created'] = hash is None
+
                 res = self.get_file(q, src, hash=hash)
+                assert not res.get('error'), res['error']
 
                 if res['hash'] != hash:
                     result['changed'] = True
@@ -255,18 +385,16 @@ class SaltyClient(Reactor):
                     with open(dst, 'wb') as f:
                         f.write(res['data'])
 
-                if os.stat(dst).st_mode & 0o777 != res['mode']:
-                    os.chmod(dst, res['mode'])
+                if _set_user_and_mode(dst, user, mode):
                     result['changed'] = True
             except Exception as e:
                 result['rc'] = 1
                 result['error'] = traceback.format_exc()
-                result['changed'] = True
 
             result['elapsed'] = elapsed(start)
             return result
 
-        def render(src, dst, **kw):
+        def render(src, dst, user='root', mode=0o644, **kw):
             start = time.time()
             result = {'cmd': f'render({src}, {dst})', 'rc': 0, 'changed': False}
             results.append(result)
@@ -274,10 +402,22 @@ class SaltyClient(Reactor):
             try:
                 dst = self.path + dst
                 hash = hash_file(dst)
+                result['created'] = hash is None
+
                 res = self.get_file(q, src, hash=hash)
+                assert not res.get('error'), res['error']
 
                 template = res['data'].decode('utf8')
-                data = Template(template).render(**context, **kw).encode('utf8')
+                try:
+                    data = mako.template.Template(template, imports=IMPORTS).render(**context, **kw).encode('utf8')
+                except Exception as e:
+                    # mako text_error_template gives us a dump of where the
+                    # error in the template occurred...
+                    result['rc'] = 1
+                    result['error'] = mako.exceptions.text_error_template().render()
+                    result['elapsed'] = elapsed(start)
+                    return result
+
                 hash_new = hash_data(data)
 
                 if hash_new != hash:
@@ -286,33 +426,119 @@ class SaltyClient(Reactor):
                     with open(dst, 'wb') as f:
                         f.write(data)
 
-                if os.stat(dst).st_mode & 0o777 != res['mode']:
-                    os.chmod(dst, res['mode'])
+                if _set_user_and_mode(dst, user, mode):
                     result['changed'] = True
             except Exception as e:
                 result['rc'] = 1
                 result['error'] = traceback.format_exc()
-                result['changed'] = True
 
             result['elapsed'] = elapsed(start)
             return result
 
-        def shell(cmds):
+        def line_in_file(line, path, user='root', mode=0o644):
+            start = time.time()
+            result = {'cmd': f'line_in_file({path}, {line})', 'rc': 0, 'changed': False, 'created': False}
+            results.append(result)
+
+            try:
+                path = self.path + path
+                if os.path.isfile(path):
+                    with open(path, 'rb') as f:
+                        content = f.read()
+                else:
+                    result['created'] = True
+                    content = b''
+                    os.makedirs(os.path.dirname(path), mode=0o755, exist_ok=True)
+
+                line = line.encode('utf8')
+
+                if line not in content:
+                    with open(path, 'wb') as f:
+                        if content and not content.endswith(b'\n'):
+                            content += 'b\n'
+                        f.write(content + line + b'\n')
+
+                if _set_user_and_mode(path, user, mode):
+                    result['changed'] = True
+            except Exception as e:
+                result['rc'] = 1
+                result['error'] = traceback.format_exc()
+
+            result['elapsed'] = elapsed(start)
+            return result
+
+        def symlink(src, dst):
+            start = time.time()
+            result = {'cmd': f'symlink({src}, {dst})', 'rc': 0, 'changed': False, 'created': False}
+            results.append(result)
+
+            try:
+                st = os.lstat(dst)
+                if stat.S_ISDIR(st.st_mode):
+                    shutil.rmtree(dst)
+                elif stat.S_ISREG(st.st_mode):
+                    os.remove(dst)
+                elif stat.S_ISLNK(st.st_mode):
+                    target = os.readlink(dst)
+                    if target != src:
+                        os.remove(dst)
+            except FileNotFoundError:
+                pass
+
+            if not os.path.exists(dst):
+                os.symlink(src, dst)
+                result['created'] = True
+                result['changed'] = True
+
+            return result
+
+        def shell(cmds, **kw):
             start = time.time()
             result = {'cmd': f'shell({cmds})', 'rc': 0, 'changed': True}
             results.append(result)
-            p = subprocess.run(cmds, shell=True, capture_output=True)
+            p = subprocess.run(cmds, shell=True, capture_output=True, **kw)
             result['rc'] = p.returncode
             result['output'] = p.stdout.decode('utf8') + '\n' + p.stderr.decode('utf8')
             result['elapsed'] = elapsed(start)
             return result
 
+        def useradd(username, system=False):
+            # add user and matching group if they do not exist
+            start = time.time()
+            result = {'cmd': f'useradd({username}, system={system})', 'rc': 0, 'changed': False, 'created': False}
+            results.append(result)
+            try:
+                pwd.getpwnam(username)
+            except KeyError:
+                rc = shell(useradd_command(username, system))
+                result['created'] = True
+                result['changed'] = True
+                result['output'] = rc['output']
+            result['elapsed'] = elapsed(start)
+            return result
+
+        def is_changed():
+            # return True if anything changed up to this point in the current
+            # run - useful for restart commands....
+            return any([_['changed'] for _ in results])
+
         output = []
         def capture_print(x):
             output.append(str(x))
 
-        g = {'copy': copy, 'render': render, 'shell': shell, 'print': capture_print}
-        content = msg.pop('content')
+        g = {
+            'copy': copy,
+            'is_changed': is_changed,
+            'line_in_file': line_in_file,
+            'makedirs': makedirs,
+            'print': capture_print,
+            'render': render,
+            'shell': shell,
+            'symlink': symlink,
+            'useradd': useradd,
+        }
+        g.update(context)
+        content = '\n'.join(IMPORTS) + '\n' + msg.pop('content')
         try:
             exec(content, g)
         except Exception as e:
@@ -355,11 +581,16 @@ class SaltyClient(Reactor):
         return self.recv_msg(sock)
 
 def main(mode, hostport, *args):
+    start = time.time()
+
     hostport = hostport.split(':')
     hostport = (hostport[0], int(hostport[1]))
 
     verbose = 0
-    opts = dict(keyfile='key.pem', certfile='cert.pem')
+    opts = {}
+
+    # consume salty args, they begin with a -
+    # fixme - argparse
     for arg in args:
         if arg.startswith('-v'):
             verbose = arg.count('v')
@@ -367,14 +598,16 @@ def main(mode, hostport, *args):
             k, v = arg[2:].split('=', 1)
             opts[k] = v
 
+    # filter run args
+    args = [_ for _ in args if not _.startswith('-')]
+
     if mode == 'server':
         SaltyServer(hostport, **opts).serve_forever()
     elif mode == 'client':
-        # --id=host1 --path=tmp/host1
         SaltyClient(hostport, **opts).serve_forever()
     elif mode in ('cli', 'bootstrap'):
         if mode == 'bootstrap':
-            server_opts = {k: v for k, v in opts.items() if k in ('certfile', 'keyfile')}
+            server_opts = {k: v for k, v in opts.items() if k in ('fileroot', 'keyroot')}
             server = SaltyServer(hostport, **server_opts)
             server.start()
             client = SaltyClient(hostport, **opts)
@@ -384,7 +617,7 @@ def main(mode, hostport, *args):
             while not server.clients:
                 time.sleep(0.1)
 
-            args = ['type=apply', 'bootstrap=true']
+            args = ['type=apply', 'bootstrap=true'] + args
 
         msg = {}
         # type=apply roles=foo,bar target=host1
@@ -393,9 +626,9 @@ def main(mode, hostport, *args):
                 k, v = arg.split('=', 1)
 
                 # list of string
-                v = v.split(',') if ',' in v else v
-
-                if v.lower() == 'true':
+                if ',' in v or k in ('roles', 'skip'):
+                    v = [_ for _ in v.split(',') if _]
+                elif v.lower() == 'true':
                     v = True
                 elif v.lower() == 'false':
                     v = False
@@ -406,24 +639,51 @@ def main(mode, hostport, *args):
 
                 msg[k] = v
 
+        total_errors = 0
         result = SaltyClient(hostport, **opts).run(msg)
         for host, roles in result['results'].items():
+            changed = 0
+            errors = 0
+            host_elapsed = 0.0
             for role, cmds in roles.items():
-                print(f'host:{host} role:{role} elapsed:{cmds["elapsed"]}')
-                if cmds.get('output') and verbose > 0:
-                    print(f'  Output:\n{cmds["output"]}')
-                for result in cmds['results']:
-                    if result['rc'] or result.get('error') or verbose > 0:
-                        output = result.pop('output', None)
-                        print(f'  {result}')
-                        if output and verbose > 1:
-                            print(output.rstrip())
+                host_elapsed += cmds['elapsed']
+                if sum(1 for _ in cmds['results'] if _['changed']):
+                    changed += 1
+                if sum(1 for _ in cmds['results'] if _['rc'] > 0):
+                    errors += 1
+
+            total_errors += errors
+
+            print()
+            print(f'host:{host} elapsed:{host_elapsed:.3f} errors:{errors} changed:{changed}')
+            for role, cmds in roles.items():
+                changed = sum(1 for _ in cmds['results'] if _['changed'])
+                errors = sum(1 for _ in cmds['results'] if _['rc'] > 0)
+                if changed or errors or verbose > 0:
+                    print(f'  role:{role:11} elapsed:{cmds["elapsed"]:.3f} errors:{errors} changed:{changed}')
+                    if cmds.get('output') and verbose > 1:
+                        print(f'    Output:\n{cmds["output"]}')
+
+                    if changed or errors or verbose > 1:
+                        for result in cmds['results']:
+                            if result['rc'] or result['changed'] or verbose > 1:
+                                output = result.pop('output', '').rstrip()
+                                s = f'    {result}'
+                                print_error(s) if result['rc'] else print(s)
+                                if output and (result['rc'] or verbose > 1):
+                                    print_error(output) if result['rc'] else print(output)
 
         if mode == 'bootstrap':
             client_serve.kill()
             server.stop()
 
+        print()
+        print(f'elapsed:{elapsed(start):.3f}')
+
+        if total_errors:
+            return 1
+
     return 0
 
 if __name__ == '__main__':
-    main(*sys.argv[1:])
+    sys.exit(main(*sys.argv[1:]))

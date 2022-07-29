@@ -13,7 +13,7 @@ import nacl.utils
 
 # uuidgen | sha256sum | awk '{print $1}'
 # you should change this if you've forked...
-_SALT = b'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+_SALT = b'7cbbb992db5d800238a898459dc4e25e67773b5923d2a836cef718891e5c7f1f'
 
 # Stream encryption is just 1MiB encrypted blocks concatenated -- to decrypt we
 # need to read the message plus 40 bytes for the nonce and authenticator
