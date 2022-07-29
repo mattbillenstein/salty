@@ -35,6 +35,8 @@ from gevent.event import AsyncResult
 import crypto
 from compat import grp, pwd, useradd_command, get_ip_addresses
 
+DEFAULT_USER = pwd.getpwuid(os.getuid()).pw_name
+
 # convenience imports used in roles and mako
 IMPORTS = [
     'import os',
@@ -327,7 +329,7 @@ class SaltyClient(Reactor):
         context = dict(msg['context'])
         context['get_ips'] = get_ips
 
-        def _set_user_and_mode(path, user='root', mode=None):
+        def _set_user_and_mode(path, user=DEFAULT_USER, mode=None):
             changed = False
             
             st = os.stat(path)
@@ -348,7 +350,7 @@ class SaltyClient(Reactor):
 
             return changed
 
-        def makedirs(path, user='root', mode=0o755):
+        def makedirs(path, user=DEFAULT_USER, mode=0o755):
             start = time.time()
             result = {'cmd': f'makedirs({path}, {user}, 0o{mode:o})', 'rc': 0, 'changed': False, 'created': False}
             results.append(result)
@@ -369,7 +371,7 @@ class SaltyClient(Reactor):
             result['elapsed'] = elapsed(start)
             return result
 
-        def copy(src, dst, user='root', mode=0o644):
+        def copy(src, dst, user=DEFAULT_USER, mode=0o644):
             start = time.time()
             result = {'cmd': f'copy({src}, {dst})', 'rc': 0, 'changed': False}
             results.append(result)
@@ -396,7 +398,7 @@ class SaltyClient(Reactor):
             result['elapsed'] = elapsed(start)
             return result
 
-        def render(src, dst, user='root', mode=0o644, **kw):
+        def render(src, dst, user=DEFAULT_USER, mode=0o644, **kw):
             start = time.time()
             result = {'cmd': f'render({src}, {dst})', 'rc': 0, 'changed': False}
             results.append(result)
@@ -437,7 +439,7 @@ class SaltyClient(Reactor):
             result['elapsed'] = elapsed(start)
             return result
 
-        def line_in_file(line, path, user='root', mode=0o644):
+        def line_in_file(line, path, user=DEFAULT_USER, mode=0o644):
             start = time.time()
             result = {'cmd': f'line_in_file({path}, {line})', 'rc': 0, 'changed': False, 'created': False}
             results.append(result)
