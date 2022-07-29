@@ -1,9 +1,9 @@
 This is a template (mako), here are some host vars:
 
-id:${id} role:${role} meta:${meta[id]}
+id:${id} role:${role} me:${me}
 
 Collected facts for this host:
-${facts[id]}
+${me['facts']}
 
 And extra stuff:
 ${extra}

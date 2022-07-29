@@ -1,0 +1,12 @@
+[Unit]
+Description=supervisord
+Documentation=man:supervisord(1)
+
+[Service]
+Type=simple
+Environment=
+ExecStartPre=
+ExecStart=/bin/bash -c 'ulimit -n 1000000 -u 500000; exec /opt/ve/bin/supervisord -n -c /opt/etc/supervisord.conf'
+
+[Install]
+WantedBy=multi-user.target

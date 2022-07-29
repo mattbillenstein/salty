@@ -1,4 +1,4 @@
 #!/bin/bash
 
-source ve/bin/activate
-../salty.py server 127.0.0.1:11111
+source ../.venv/bin/activate
+../salty.py server 127.0.0.1:11110

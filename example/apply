@@ -1,4 +1,4 @@
 #!/bin/bash
 
-source ve/bin/activate
-../salty.py cli 127.0.0.1:11111 type=apply -vv $*
+source ../.venv/bin/activate
+../salty.py cli 127.0.0.1:11110 type=apply -vv $*

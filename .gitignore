@@ -1,6 +1,13 @@
+# keys
 *.pem
+*.pass
+
+# python
 *.pyc
-ve
+__pycache__
+
+# venv
+.venv
 
 # vim
 *.swp
