@@ -606,7 +606,10 @@ def main(mode, hostport, *args):
     args = [_ for _ in args if not _.startswith('-')]
 
     if mode == 'server':
-        SaltyServer(hostport, **opts).serve_forever()
+        try:
+            SaltyServer(hostport, **opts).serve_forever()
+        except KeyboardInterrupt:
+            print('Exit.')
     elif mode == 'client':
         SaltyClient(hostport, **opts).serve_forever()
     elif mode in ('cli', 'bootstrap'):
