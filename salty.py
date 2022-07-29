@@ -142,11 +142,13 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
         self.facts = {}
         self.futures = {}
         self.fileroot = kwargs.pop('fileroot', os.getcwd())
-        self.keyroot = kwargs.pop('keyroot', os.getcwd())
+
+        keyroot = kwargs.pop('keyroot', os.getcwd())
+        kwargs['keyfile'] = os.path.join(keyroot, 'key.pem')
+        kwargs['certfile'] = os.path.join(keyroot, 'cert.pem')
 
         self.crypto_pass = None
-
-        fname = os.path.join(self.keyroot, 'crypto.pass')
+        fname = os.path.join(keyroot, 'crypto.pass')
         if os.path.exists(fname):
             with open(fname) as f:
                 self.crypto_pass = f.read().strip()

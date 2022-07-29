@@ -39,7 +39,7 @@ if sys.platform == 'darwin':
 
                     if k == 'users':
                         v = v.split()
-                        
+
                     r[k] = v
 
                 cls._cache = [cls.struct(tuple(_.get(k) for k in cls.fields)) for _ in recs]
