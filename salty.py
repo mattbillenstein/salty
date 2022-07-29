@@ -285,7 +285,7 @@ class SaltyClient(Reactor):
         sock = ssl.wrap_socket(
             sock,
             keyfile=os.path.join(self.keyroot, 'key.pem'),
-            certfile=os.path.join(self.certfile, 'cert.pem'),
+            certfile=os.path.join(self.keyroot, 'cert.pem'),
         )
         sock.connect(self.addr)
         return sock
