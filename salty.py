@@ -204,10 +204,6 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
         hosts = {}
         for cluster, servers in meta['hosts'].items():
             for id, v in servers.items():
-                # skip disconnected / non-existing hosts
-                if id not in self.facts:
-                    continue
-
                 v['cluster'] = cluster
                 v['facts'] = self.facts[id]
                 v['vars'] = meta['envs'][v['env']]
