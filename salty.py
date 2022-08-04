@@ -130,7 +130,7 @@ class Reactor(object):
                         self.facts[client_id] = msg['facts']
                     else:
                         self.handle_msg(msg, q)
-                except ConnectionResetError:
+                except (ConnectionResetError, ssl.SSLError):
                     print(f'Connection lost {addr[0]}:{addr[1]}')
                     break
         finally:
