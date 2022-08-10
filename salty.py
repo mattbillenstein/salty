@@ -82,14 +82,21 @@ class Reactor(object):
             return len(data)
         return sock.send(data)
 
-    def recv_msg(self, sock):
-        data = sock.read(4)
-        if not data:
-            return None
-        size = struct.unpack('!I', data)[0]
-        data = sock.read(size)
-        while len(data) < size:
+    def _read_bytes(self, sock, size):
+        data = b''
+        for i in range(50):
             data += sock.read(size - len(data))
+            if len(data) == size:
+                return data
+            time.sleep(0.1)
+        raise ConnectionError('Could not read {size} bytes')
+
+    def recv_msg(self, sock):
+        data = self._read_bytes(sock, 4)
+        size = struct.unpack('!I', data)[0]
+        if size > 100_000_000:
+            raise ConnectionError('Message too big')
+        data = self._read_bytes(sock, size)
         msg = msgpack.unpackb(data)
         return msg
 
@@ -130,7 +137,7 @@ class Reactor(object):
                         self.facts[client_id] = msg['facts']
                     else:
                         self.handle_msg(msg, q)
-                except (ConnectionResetError, ssl.SSLError):
+                except OSError:
                     print(f'Connection lost {addr[0]}:{addr[1]}')
                     break
         finally:
