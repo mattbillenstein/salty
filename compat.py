@@ -121,7 +121,7 @@ if sys.platform == 'darwin':
 
     def get_ip_addresses():
         d = {'private_ip': '127.0.0.1', 'public_ip': None}
-        p = subprocess.run(['ipconfig', 'getifaddr', 'en0'], capture_output=True)
+        p = subprocess.run("ifconfig | grep 'inet ' | grep -Fv 127.0.0.1 | awk '{print $2}' | head -1", shell=True, capture_output=True)
         assert p.returncode == 0, p
         ip = p.stdout.decode('utf8').strip()
         if ip and not ':' in ip:
