@@ -82,23 +82,23 @@ class Reactor(object):
             return len(data)
         return sock.send(data)
 
-    def _read_bytes(self, sock, size):
+    def recv_msg(self, sock):
+        data = sock.read(4)
+        if not data:
+            raise ConnectionError('Socket dead')
+
+        size = struct.unpack('!I', data)[0]
+        if size > 100_000_000:
+            raise ConnectionError('Message too big')
+
         data = b''
         for i in range(50):
             data += sock.read(size - len(data))
             if len(data) == size:
-                return data
+                return msgpack.unpackb(data)
             time.sleep(0.1)
-        raise ConnectionError('Could not read {size} bytes')
 
-    def recv_msg(self, sock):
-        data = self._read_bytes(sock, 4)
-        size = struct.unpack('!I', data)[0]
-        if size > 100_000_000:
-            raise ConnectionError('Message too big')
-        data = self._read_bytes(sock, size)
-        msg = msgpack.unpackb(data)
-        return msg
+        raise ConnectionError('Could not read {size} bytes')
 
     def _writer(self, sock, q):
         while 1:
@@ -127,9 +127,6 @@ class Reactor(object):
             while 1:
                 try:
                     msg = self.recv_msg(fh)
-                    if not msg:
-                        print(f'Connection disconnected {addr[0]}:{addr[1]}')
-                        break
                     if msg['type'] == 'identify':
                         client_id = msg['id']
                         print(f'id:{client_id} facts:{msg["facts"]}')
