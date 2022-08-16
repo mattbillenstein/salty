@@ -323,7 +323,9 @@ class SaltyClient(Reactor):
             ips = []
             cluster = context['me']['cluster']
             if cluster == 'local':
-                return ['127.0.0.1']
+                if role in context['me']['roles']:
+                    ips.append('127.0.0.1')
+                return ips
             for id, h in context['hosts'].items():
                 if h['cluster'] == cluster and role in h['roles']:
                     ips.append(h['facts'][key])
