@@ -377,6 +377,28 @@ class SaltyClient(Reactor):
             result['elapsed'] = elapsed(start)
             return result
 
+        def remove(path):
+            start = time.time()
+            result = {'cmd': f'remove({path})', 'rc': 0, 'changed': False, 'created': False, 'removed': False}
+            results.append(result)
+            try:
+                path = self.path + path
+
+                if os.path.exists(path):
+                    if os.path.isdir(path):
+                        shutil.rmtree(path)
+                    else:
+                        os.remove(path)
+                    result['removed'] = True
+                    result['changed'] = True
+
+            except Exception as e:
+                result['rc'] = 1
+                result['error'] = traceback.format_exc()
+
+            result['elapsed'] = elapsed(start)
+            return result
+
         def copy(src, dst, user=DEFAULT_USER, mode=0o644):
             start = time.time()
             result = {'cmd': f'copy({src}, {dst})', 'rc': 0, 'changed': False}
@@ -543,6 +565,7 @@ class SaltyClient(Reactor):
             'makedirs': makedirs,
             'print': capture_print,
             'render': render,
+            'remove': remove,
             'shell': shell,
             'symlink': symlink,
             'useradd': useradd,
