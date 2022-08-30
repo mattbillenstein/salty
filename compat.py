@@ -138,7 +138,7 @@ elif sys.platform == 'linux':
 
     def useradd_command(username, system=False):
         system = ' --system' if system else ''
-        return f'useradd --user-group{system} --shell /bin/bash {username}'
+        return f'useradd --create-home --user-group{system} --shell /bin/bash {username}'
 
     def get_ip_addresses():
         d = {'private_ip': '127.0.0.1', 'public_ip': None}
