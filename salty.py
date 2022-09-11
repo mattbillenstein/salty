@@ -684,7 +684,7 @@ def main(mode, hostport, *args):
         total_errors = 0
         result = SaltyClient(hostport, **opts).run(msg)
 
-        if result['error']:
+        if result.get('error'):
             print(f'Exception in apply:\n{result["error"]}')
 
         for host, roles in result['results'].items():
