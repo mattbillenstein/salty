@@ -193,92 +193,98 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
     def handle_apply(self, msg, q):
         start = time.time()
         results = defaultdict(dict)
+        msg_result = {'type': 'apply_result', 'results': results}
 
-        # apply roles to target servers
-        meta = {}
-        for fname in ('hosts', 'envs', 'clusters'):
-            with open(os.path.join(self.fileroot, 'meta', f'{fname}.py')) as f:
-                meta[fname] = {}
-                exec(f.read(), meta[fname])
-                for k in list(meta[fname]):
-                    if k.startswith('_'):
-                        meta[fname].pop(k)
+        try:
+            # apply roles to target servers
+            meta = {}
+            for fname in ('hosts', 'envs', 'clusters'):
+                with open(os.path.join(self.fileroot, 'meta', f'{fname}.py')) as f:
+                    meta[fname] = {}
+                    exec(f.read(), meta[fname])
+                    for k in list(meta[fname]):
+                        if k.startswith('_'):
+                            meta[fname].pop(k)
 
-        # unwind cluster -> id in hosts and apply facts/envs/clusters
-        hosts = {}
-        for cluster, servers in meta['hosts'].items():
-            for id, v in servers.items():
-                # skip disconnected / non-existing hosts
-                if id not in self.facts:
+            # unwind cluster -> id in hosts and apply facts/envs/clusters
+            hosts = {}
+            for cluster, servers in meta['hosts'].items():
+                for id, v in servers.items():
+                    # skip disconnected / non-existing hosts
+                    if id not in self.facts:
+                        continue
+
+                    v['cluster'] = cluster
+                    v['facts'] = self.facts[id]
+                    v['vars'] = meta['envs'][v['env']]
+                    v['vars'].update(meta['clusters'][cluster])
+                    hosts[id] = v
+
+            target = msg.get('target')
+            target_cluster = None
+            if target and target.startswith('cluster:'):
+                target_cluster = target.split(':')[1]
+                target = None
+
+            crypto.decrypt_dict(meta, self.crypto_pass)
+
+            # roles to apply, if empty, apply all host roles
+            roles = msg.get('roles', [])
+            # roles to skip unless given explictely
+            skip = [_ for _ in msg.get('skip', []) if _ not in roles]
+
+            context = {k: v for k, v in msg.items() if k not in ('type', 'target', 'roles', 'skip')}
+
+            for id, q2 in self.clients.items():
+                if id not in hosts:
+                    print(f'Apply missing host {id} in metadata')
                     continue
 
-                v['cluster'] = cluster
-                v['facts'] = self.facts[id]
-                v['vars'] = meta['envs'][v['env']]
-                v['vars'].update(meta['clusters'][cluster])
-                hosts[id] = v
-
-        target = msg.get('target')
-        target_cluster = None
-        if target and target.startswith('cluster:'):
-            target_cluster = target.split(':')[1]
-            target = None
-
-        crypto.decrypt_dict(meta, self.crypto_pass)
-
-        # roles to apply, if empty, apply all host roles
-        roles = msg.get('roles', [])
-        # roles to skip unless given explictely
-        skip = [_ for _ in msg.get('skip', []) if _ not in roles]
-
-        context = {k: v for k, v in msg.items() if k not in ('type', 'target', 'roles', 'skip')}
-
-        for id, q2 in self.clients.items():
-            if id not in hosts:
-                print(f'Apply missing host {id} in metadata')
-                continue
-
-            if target_cluster and hosts[id]['cluster'] != target_cluster:
-                continue
-
-            for role in hosts[id]['roles']:
-                if not os.path.isfile(os.path.join(self.fileroot, 'roles', f'{role}.py')):
-                    # roles are sometimes just tags, just silently ignore
-                    # missing role .py files
-                    # results[id][role] = {'results': [{'rc': 1, 'cmd': '...role missing...', 'elapsed': 0.0}], 'elapsed': 0.0}
+                if target_cluster and hosts[id]['cluster'] != target_cluster:
                     continue
 
-                if (roles and role not in roles) or role in skip:
-                    results[id][role] = {'results': [{'rc': 0, 'cmd': '...role skipped...', 'elapsed': 0.0, 'changed': False}], 'elapsed': 0.0}
-                    continue
+                for role in hosts[id]['roles']:
+                    if not os.path.isfile(os.path.join(self.fileroot, 'roles', f'{role}.py')):
+                        # roles are sometimes just tags, just silently ignore
+                        # missing role .py files
+                        # results[id][role] = {'results': [{'rc': 1, 'cmd': '...role missing...', 'elapsed': 0.0}], 'elapsed': 0.0}
+                        continue
 
-                # target here can be glob by id (p-*.foo.dev)
-                if target and not fnmatch.fnmatch(id, target):
-                    results[id][role] = {'results': [{'rc': 0, 'cmd': '...host skipped...', 'elapsed': 0.0, 'changed': False}], 'elapsed': 0.0}
-                    continue
+                    if (roles and role not in roles) or role in skip:
+                        results[id][role] = {'results': [{'rc': 0, 'cmd': '...role skipped...', 'elapsed': 0.0, 'changed': False}], 'elapsed': 0.0}
+                        continue
 
-                with open(os.path.join(self.fileroot, 'roles', f'{role}.py')) as f:
-                    content = f.read()
+                    # target here can be glob by id (p-*.foo.dev)
+                    if target and not fnmatch.fnmatch(id, target):
+                        results[id][role] = {'results': [{'rc': 0, 'cmd': '...host skipped...', 'elapsed': 0.0, 'changed': False}], 'elapsed': 0.0}
+                        continue
 
-                ctx = {'id': id, 'role': role, 'hosts': hosts, 'me': hosts[id], 'bootstrap': False}
-                ctx.update(context)
-                msg = {'type': 'run', 'content': content, 'context': ctx}
-                results[id][role] = (q2, msg)
+                    with open(os.path.join(self.fileroot, 'roles', f'{role}.py')) as f:
+                        content = f.read()
 
-        # scatter by host, then collect - roles must be run sequentially
-        def dispatch(host_roles):
-            for role, tup in list(host_roles.items()):
-                if not isinstance(tup, dict):
-                    host_roles[role] = self.do_rpc(*tup)['result']
+                    ctx = {'id': id, 'role': role, 'hosts': hosts, 'me': hosts[id], 'bootstrap': False}
+                    ctx.update(context)
+                    msg = {'type': 'run', 'content': content, 'context': ctx}
+                    results[id][role] = (q2, msg)
 
-        greenlets = []
-        for id, host_roles in results.items():
-            g = gevent.spawn(dispatch, host_roles)
-            greenlets.append(g)
+            # scatter by host, then collect - roles must be run sequentially
+            def dispatch(host_roles):
+                for role, tup in list(host_roles.items()):
+                    if not isinstance(tup, dict):
+                        host_roles[role] = self.do_rpc(*tup)['result']
 
-        gevent.wait(greenlets)
+            greenlets = []
+            for id, host_roles in results.items():
+                g = gevent.spawn(dispatch, host_roles)
+                greenlets.append(g)
 
-        self.send_msg(q, {'type': 'apply_result', 'results': results, 'elapsed': elapsed(start)})
+            gevent.wait(greenlets)
+
+        except:
+            msg_result['error'] = traceback.format_exc()
+
+        msg_result['elapsed'] = elapsed(start)
+        self.send_msg(q, msg_result)
 
 class SaltyClient(Reactor):
     def __init__(self, addr, keyroot=os.getcwd(), id=None, path=''):
@@ -677,6 +683,10 @@ def main(mode, hostport, *args):
 
         total_errors = 0
         result = SaltyClient(hostport, **opts).run(msg)
+
+        if result['error']:
+            print(f'Exception in apply:\n{result["error"]}')
+
         for host, roles in result['results'].items():
             changed = 0
             errors = 0
