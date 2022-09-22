@@ -216,7 +216,8 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
 
                     v['cluster'] = cluster
                     v['facts'] = self.facts[id]
-                    v['vars'] = dict(meta['envs'][v['env']])
+                    v['vars'] = {}
+                    v['vars'].update(meta['envs'][v['env']])
                     v['vars'].update(meta['clusters'][cluster])
                     hosts[id] = v
 
