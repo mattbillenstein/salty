@@ -80,10 +80,12 @@ class Reactor(object):
         if isinstance(sock, Queue):
             sock.put(data)
             return len(data)
-        return sock.send(data)
+        with gevent.Timeout(30):
+            sock.send(data)
 
-    def recv_msg(self, sock):
-        data = sock.read(4)
+    def recv_msg(self, sock, timeout=30):
+        with gevent.Timeout(timeout):
+            data = sock.read(4)
         if not data:
             raise ConnectionError('Socket dead')
 
@@ -93,7 +95,8 @@ class Reactor(object):
 
         data = b''
         for i in range(50):
-            data += sock.read(size - len(data))
+            with gevent.Timeout(timeout):
+                data += sock.read(size - len(data))
             if len(data) == size:
                 return msgpack.unpackb(data)
             time.sleep(0.1)
@@ -103,7 +106,8 @@ class Reactor(object):
     def _writer(self, sock, q):
         while 1:
             msg = q.get()
-            sock.send(msg)
+            with gevent.Timeout(30):
+                sock.send(msg)
 
     def handle_future(self, msg, q):
         ar = self.futures.pop(msg['future_id'], None)
@@ -136,6 +140,9 @@ class Reactor(object):
                         self.handle_msg(msg, q)
                 except OSError:
                     print(f'Connection lost {addr[0]}:{addr[1]}')
+                    break
+                except gevent.Timeout:
+                    print(f'Connection lost {addr[0]}:{addr[1]} timeout')
                     break
         finally:
             if client_id:
@@ -608,8 +615,11 @@ class SaltyClient(Reactor):
                     time.sleep(5)
             except KeyboardInterrupt:
                 break
-            except Exception as e:
+            except Exception:
                 print(f'Exception in client serve: {traceback.format_exc()}')
+                time.sleep(3)
+            except gevent.Timeout:
+                print(f'Exception in client serve: {traceback.format_exc()} timeout')
                 time.sleep(3)
             finally:
                 if g:
@@ -618,7 +628,7 @@ class SaltyClient(Reactor):
     def run(self, msg):
         sock = self.connect()
         self.send_msg(sock, msg)
-        return self.recv_msg(sock)
+        return self.recv_msg(sock, timeout=600)
 
 def main(mode, hostport, *args):
     start = time.time()
