@@ -44,6 +44,11 @@ IMPORTS = [
     'import json',
 ]
 
+class ConnectionTimeout(Exception):
+    pass
+CONNECTION_TIMEOUT = ConnectionTimeout('Connection timeout')
+SOCKET_TIMEOUT = 30
+
 _print = print
 def print(*args):
     _print(*args)
@@ -80,11 +85,11 @@ class Reactor(object):
         if isinstance(sock, Queue):
             sock.put(data)
             return len(data)
-        with gevent.Timeout(30):
+        with gevent.Timeout(SOCKET_TIMEOUT, CONNECTION_TIMEOUT):
             sock.send(data)
 
-    def recv_msg(self, sock, timeout=30):
-        with gevent.Timeout(timeout):
+    def recv_msg(self, sock, timeout=SOCKET_TIMEOUT):
+        with gevent.Timeout(timeout, CONNECTION_TIMEOUT):
             data = sock.read(4)
         if not data:
             raise ConnectionError('Socket dead')
@@ -95,7 +100,7 @@ class Reactor(object):
 
         data = b''
         for i in range(50):
-            with gevent.Timeout(timeout):
+            with gevent.Timeout(timeout, CONNECTION_TIMEOUT):
                 data += sock.read(size - len(data))
             if len(data) == size:
                 return msgpack.unpackb(data)
@@ -106,7 +111,7 @@ class Reactor(object):
     def _writer(self, sock, q):
         while 1:
             msg = q.get()
-            with gevent.Timeout(30):
+            with gevent.Timeout(SOCKET_TIMEOUT, CONNECTION_TIMEOUT):
                 sock.send(msg)
 
     def handle_future(self, msg, q):
@@ -124,13 +129,19 @@ class Reactor(object):
     def handle(self, sock, addr):
         print(f'Connection established {addr[0]}:{addr[1]}')
         client_id = None
+        timeout = SOCKET_TIMEOUT
         q = Queue()
         g = gevent.spawn(self._writer, sock, q)
         try:
             fh = sock.makefile(mode='b')
             while 1:
                 try:
-                    msg = self.recv_msg(fh)
+                    msg = self.recv_msg(fh, timeout)
+                    # timeout for the _next_ read -- if we're handling a long
+                    # running command like apply... Perhaps better ways to
+                    # handle this, default to a longer timeout, but shorter
+                    # timeouts for ping/pong?
+                    timeout = msg.get('timeout', SOCKET_TIMEOUT)
                     if msg['type'] == 'identify':
                         client_id = msg['id']
                         print(f'id:{client_id} facts:{msg["facts"]}')
@@ -140,9 +151,6 @@ class Reactor(object):
                         self.handle_msg(msg, q)
                 except OSError:
                     print(f'Connection lost {addr[0]}:{addr[1]}')
-                    break
-                except gevent.Timeout:
-                    print(f'Connection lost {addr[0]}:{addr[1]} timeout')
                     break
         finally:
             if client_id:
@@ -618,17 +626,15 @@ class SaltyClient(Reactor):
             except Exception:
                 print(f'Exception in client serve: {traceback.format_exc()}')
                 time.sleep(3)
-            except gevent.Timeout:
-                print(f'Exception in client serve: {traceback.format_exc()} timeout')
-                time.sleep(3)
             finally:
                 if g:
                     g.kill()
 
     def run(self, msg):
+        msg['timeout'] = 300
         sock = self.connect()
         self.send_msg(sock, msg)
-        return self.recv_msg(sock, timeout=600)
+        return self.recv_msg(sock, timeout=msg['timeout'])
 
 def main(mode, hostport, *args):
     start = time.time()
