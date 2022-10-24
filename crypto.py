@@ -38,7 +38,7 @@ def encrypt(data, password):
     noncebytes = nacl.utils.random(nacl.secret.SecretBox.NONCE_SIZE)
     secretbox = nacl.secret.SecretBox(keybytes)
     try:
-        return secretbox.encrypt(data, noncebytes, encoder=nacl.encoding.URLSafeBase64Encoder)
+        return secretbox.encrypt(data, noncebytes)
     except nacl.exceptions.CryptoError as e:
         raise CryptoError(e)
 
@@ -53,7 +53,7 @@ def decrypt(data, password):
     keybytes = hashlib.pbkdf2_hmac('sha256', password, _SALT, 4)
     secretbox = nacl.secret.SecretBox(keybytes)
     try:
-        return secretbox.decrypt(data, encoder=nacl.encoding.URLSafeBase64Encoder)
+        return secretbox.decrypt(data)
     except nacl.exceptions.CryptoError as e:
         raise CryptoError(e)
 
@@ -68,7 +68,7 @@ def encrypt_stream(fin, fout, password):
         data = fin.read(_STREAM_BLOCK_SIZE)
         if not data:
             break
-        fout.write(secretbox.encrypt(data, noncebytes, encoder=nacl.encoding.URLSafeBase64Encoder))
+        fout.write(secretbox.encrypt(data, noncebytes))
     fout.flush()
 
 
@@ -81,15 +81,15 @@ def decrypt_stream(fin, fout, password):
         data = fin.read(_STREAM_BLOCK_SIZE_ENCRYPTED)
         if not data:
             break
-        fout.write(secretbox.decrypt(data, encoder=nacl.encoding.URLSafeBase64Encoder))
+        fout.write(secretbox.decrypt(data))
     fout.flush()
 
 
 def encrypt_string(data, password):
-    return base64.b64encode(encrypt(data, password)).decode('utf8')
+    return base64.urlsafe_b64encode(encrypt(data, password)).decode('utf8')
 
 def decrypt_string(data, password):
-    return decrypt(base64.b64decode(data), password).decode('utf8')
+    return decrypt(base64.urlsafe_b64decode(data), password).decode('utf8')
 
 def decrypt_dict(d, password):
     for k, v in list(d.items()):
