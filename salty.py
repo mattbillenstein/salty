@@ -703,6 +703,7 @@ def main(mode, hostport, *args):
 
         if result.get('error'):
             print(f'Exception in apply:\n{result["error"]}')
+            sys.exit(1)
 
         for host, roles in result['results'].items():
             changed = 0
