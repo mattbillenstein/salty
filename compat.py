@@ -142,9 +142,9 @@ elif sys.platform == 'linux':
 
     def get_ip_addresses():
         d = {'private_ip': '127.0.0.1', 'public_ip': None}
-        p = subprocess.run(['hostname', '-I'], capture_output=True)
+        p = subprocess.run(["awk '/32 host/ { print f } {f=$2}' /proc/net/fib_trie | sort -u"], shell=True, capture_output=True)
         assert p.returncode == 0, p
-        for ip in p.stdout.decode('utf8').strip().split():
+        for ip in p.stdout.decode('utf8').strip().split('\n'):
             if ':' in ip:  # ipv6
                 continue
 
