@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import os.path
 import subprocess
 import sys
 
@@ -136,9 +137,14 @@ elif sys.platform == 'linux':
     import pwd
     import grp
 
-    def useradd_command(username, system=False):
-        system = ' --system' if system else ''
-        return f'useradd --create-home --user-group{system} --shell /bin/bash {username}'
+    if os.path.exists('/etc/alpine-release'):
+        def useradd_command(username, system=False):
+            system = ' -S' if system else ''
+            return f'addgroup {username} || true; adduser {system} -G {username} -s /bin/bash {username}'
+    else:
+        def useradd_command(username, system=False):
+            system = ' --system' if system else ''
+            return f'useradd --create-home --user-group{system} --shell /bin/bash {username}'
 
     def get_ip_addresses():
         d = {'private_ip': '127.0.0.1', 'public_ip': None}
