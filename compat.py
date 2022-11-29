@@ -140,7 +140,7 @@ elif sys.platform == 'linux':
     if os.path.exists('/etc/alpine-release'):
         def useradd_command(username, system=False):
             system = ' -S' if system else ''
-            return f'addgroup {username} || true; adduser {system} -G {username} -s /bin/bash {username}'
+            return f'addgroup {username} || true; pw="$(head -c 20 /dev/urandom | base64 | head -c 10)"; ( echo "$pw"; echo "$pw" ) | adduser {system} -G {username} -s /bin/bash {username}'
     else:
         def useradd_command(username, system=False):
             system = ' --system' if system else ''
