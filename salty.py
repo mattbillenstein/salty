@@ -461,24 +461,27 @@ class SaltyClient(Reactor):
                 res = self.get_file(q, src, hash=hash)
                 assert not res.get('error'), res['error']
 
-                template = res['data'].decode('utf8')
-                try:
-                    data = mako.template.Template(template, imports=IMPORTS).render(**context, **kw).encode('utf8')
-                except Exception as e:
-                    # mako text_error_template gives us a dump of where the
-                    # error in the template occurred...
-                    result['rc'] = 1
-                    result['error'] = mako.exceptions.text_error_template().render()
-                    result['elapsed'] = elapsed(start)
-                    return result
+                # if the template has no template directives, the hash could
+                # already match...
+                if res['hash'] != hash:
+                    template = res['data'].decode('utf8')
+                    try:
+                        data = mako.template.Template(template, imports=IMPORTS).render(**context, **kw).encode('utf8')
+                    except Exception as e:
+                        # mako text_error_template gives us a dump of where the
+                        # error in the template occurred...
+                        result['rc'] = 1
+                        result['error'] = mako.exceptions.text_error_template().render()
+                        result['elapsed'] = elapsed(start)
+                        return result
 
-                hash_new = hash_data(data)
+                    hash_new = hash_data(data)
 
-                if hash_new != hash:
-                    result['changed'] = True
-                    os.makedirs(os.path.dirname(dst), mode=0o755, exist_ok=True)
-                    with open(dst, 'wb') as f:
-                        f.write(data)
+                    if hash_new != hash:
+                        result['changed'] = True
+                        os.makedirs(os.path.dirname(dst), mode=0o755, exist_ok=True)
+                        with open(dst, 'wb') as f:
+                            f.write(data)
 
                 if _set_user_and_mode(dst, user, mode):
                     result['changed'] = True
