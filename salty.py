@@ -211,6 +211,12 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
         msg_result = {'type': 'apply_result', 'results': results}
 
         try:
+            target = msg.get('target')
+            target_cluster = None
+            if target and target.startswith('cluster:'):
+                target_cluster = target.split(':')[1]
+                target = None
+
             # apply roles to target servers
             meta = {}
             for fname in ('hosts', 'envs', 'clusters'):
@@ -225,8 +231,11 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
             hosts = {}
             for cluster, servers in meta['hosts'].items():
                 for id, v in servers.items():
-                    # skip disconnected / non-existing hosts
+                    # skip disconnected / non-existing hosts, but return error
+                    # if target is cluster
                     if id not in self.facts:
+                        if target_cluster and target_cluster == cluster:
+                            results[id][''] = {'results': [{'rc': 1, 'cmd': '...host missing...', 'elapsed': 0.0, 'changed': False}], 'elapsed': 0.0}
                         continue
 
                     v['cluster'] = cluster
@@ -235,12 +244,6 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
                     v['vars'].update(meta['envs'][v['env']])
                     v['vars'].update(meta['clusters'][cluster])
                     hosts[id] = v
-
-            target = msg.get('target')
-            target_cluster = None
-            if target and target.startswith('cluster:'):
-                target_cluster = target.split(':')[1]
-                target = None
 
             crypto.decrypt_dict(meta, self.crypto_pass)
 
@@ -263,7 +266,7 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
                     if not os.path.isfile(os.path.join(self.fileroot, 'roles', f'{role}.py')):
                         # roles are sometimes just tags, just silently ignore
                         # missing role .py files
-                        # results[id][role] = {'results': [{'rc': 1, 'cmd': '...role missing...', 'elapsed': 0.0}], 'elapsed': 0.0}
+                        # results[id][role] = {'results': [{'rc': 1, 'cmd': '...role missing...', 'elapsed': 0.0, 'changed': False}], 'elapsed': 0.0}
                         continue
 
                     if (roles and role not in roles) or role in skip:
