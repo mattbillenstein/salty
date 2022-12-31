@@ -247,6 +247,7 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
             result['created'] = True
             result['changed'] = True
 
+        result['elapsed'] = elapsed(start)
         return result
 
     def shell(cmds, **kw):
@@ -271,6 +272,7 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
             result['created'] = True
             result['changed'] = True
             result['output'] = rc['output']
+
         result['elapsed'] = elapsed(start)
         return result
 
@@ -297,6 +299,7 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
             result['rc'] = 1
             result['error'] = traceback.format_exc()
 
+        result['elapsed'] = elapsed(start)
         return result
 
     def is_changed():
