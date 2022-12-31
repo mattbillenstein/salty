@@ -432,4 +432,8 @@ def _syncdir(src, dst, user, srcs, dsts, syncdir_get_file):
         if sattrs['type'] == 'dir':
             changes.extend(_syncdir(source, target, user, sattrs['entries'], dattrs.get('entries', {}), syncdir_get_file))
 
+            # set mtime after we've sync'd, changes inside the dir change the
+            # mtime...
+            os.utime(target, ns=(sattrs['mtime'], sattrs['mtime']))
+
     return changes
