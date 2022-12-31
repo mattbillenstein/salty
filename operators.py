@@ -59,7 +59,7 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
 
     def _set_user_and_mode(path, user=DEFAULT_USER, mode=None):
         changed = False
-        
+
         st = os.stat(path)
 
         if mode is None:
@@ -291,8 +291,9 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
                 result['created'] = True
                 result['changed'] = True
 
-            changes = _syncdir(src, dst, user, syncdir_get_file, syncdir_scandir)
-            print(changes)
+            srcs = syncdir_scandir(src)  # rpc
+            dsts = syncdir_scandir_local(dst)
+            changes = _syncdir(src, dst, user, srcs, dsts, syncdir_get_file)
             result['changed'] = result['changed'] or len(changes) > 0
             result['changes'] = changes
         except Exception as e:
@@ -348,15 +349,15 @@ def syncdir_scandir_local(src):
             'gid': st.st_gid,
         }
 
-        # is_symlink comes before is_file here because is_file is True for a
-        # symlink...
+        # is_symlink has to come first because is_file is true for a symlink...
         if entry.is_symlink():
             attrs['type'] = 'link'
             attrs['target'] = os.readlink(os.path.join(src, entry.name))
-        elif entry.is_dir():
-            attrs['type'] = 'dir'
         elif entry.is_file():
             attrs['type'] = 'file'
+        elif entry.is_dir():
+            attrs['type'] = 'dir'
+            attrs['entries'] = syncdir_scandir_local(os.path.join(src, entry.name))
         else:
             raise Exception(f'Unrecognized type {src}/{entry.name}')
 
@@ -364,31 +365,29 @@ def syncdir_scandir_local(src):
 
     return d
 
-def _syncdir(src, dst, user, syncdir_get_file, syncdir_scandir):
+def _syncdir(src, dst, user, srcs, dsts, syncdir_get_file):
     changes = []
 
-    s = syncdir_scandir(src)  # rpc
-    d = syncdir_scandir_local(dst)
 
     # delete first if not in src, or different type, then remove so we copy
     # later
-    for dname in list(d):
-        if not dname in s or \
-                d[dname]['type'] != s[dname]['type'] or \
-                s[dname]['type'] == 'link' and d[dname]['target'] != s[dname]['target']:
+    for dname in list(dsts):
+        if not dname in srcs or \
+                dsts[dname]['type'] != srcs[dname]['type'] or \
+                srcs[dname]['type'] == 'link' and dsts[dname]['target'] != srcs[dname]['target']:
             target = os.path.join(dst, dname)
-            dattrs = d.pop(dname)
+            dattrs = dsts.pop(dname)
             if dattrs['type'] == 'dir':
                 shutil.rmtree(target)
             else:
                 os.remove(target)
             changes.append(('-', target))
 
-    for sname, sattrs in s.items():
+    for sname, sattrs in srcs.items():
         source = os.path.join(src, sname)
         target = os.path.join(dst, sname)
 
-        dattrs = d.get(sname)
+        dattrs = dsts.get(sname, {})
         if not dattrs:
             # create file/link/dir if it doesn't exists, set utime/chown/chmod
             changes.append(('+', target))
@@ -431,6 +430,6 @@ def _syncdir(src, dst, user, syncdir_get_file, syncdir_scandir):
 
         # lastly, recurse on directories
         if sattrs['type'] == 'dir':
-            changes.extend(_syncdir(source, target, user, syncdir_get_file, syncdir_scandir))
+            changes.extend(_syncdir(source, target, user, sattrs['entries'], dattrs.get('entries', {}), syncdir_get_file))
 
     return changes
