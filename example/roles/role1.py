@@ -11,3 +11,5 @@ for i in range(3):
 shell('''
 echo "The date is $(date)"
 ''')
+
+syncdir('foo', '/foo')

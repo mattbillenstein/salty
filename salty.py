@@ -179,6 +179,28 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
 
         self.send_msg(q, msg)
 
+    def handle_syncdir_get_file(self, msg, q):
+        msg['type'] = 'future'
+
+        try:
+            with open(msg['path'], 'rb') as f:
+                data = f.read()
+            msg['data'] = data
+        except Exception:
+            msg['error'] = traceback.format_exc()
+
+        self.send_msg(q, msg)
+
+    def handle_syncdir_scandir(self, msg, q):
+        msg['type'] = 'future'
+
+        try:
+            msg['data'] = operators.syncdir_scandir_local(msg['path'])
+        except Exception:
+            msg['error'] = traceback.format_exc()
+
+        self.send_msg(q, msg)
+
     def handle_apply(self, msg, q):
         start = time.time()
         results = defaultdict(dict)
@@ -318,7 +340,23 @@ class SaltyClient(Reactor):
         def get_file(path, **opts):
             return self.get_file(q, path, **opts)
 
-        results, output = operators.run(msg.pop('content'), msg['context'], start, self.path, get_file)
+        def syncdir_get_file(path):
+            return self.syncdir_get_file(q, path)
+
+        def syncdir_scandir(path):
+            msg = self.syncdir_scandir(q, path)
+            return msg['data']
+
+        content = msg.pop('content')
+        results, output = operators.run(
+            content,
+            msg['context'],
+            start,
+            self.path,
+            get_file,
+            syncdir_get_file,
+            syncdir_scandir,
+        )
 
         msg['type'] = 'future'
         msg['result'] = {'results': results, 'output': '\n'.join(output), 'elapsed': elapsed(start)}
@@ -327,6 +365,14 @@ class SaltyClient(Reactor):
     def get_file(self, sock, path, **opts):
         msg = {'type': 'get_file', 'path': path}
         msg.update(opts)
+        return self.do_rpc(sock, msg)
+
+    def syncdir_get_file(self, sock, path):
+        msg = {'type': 'syncdir_get_file', 'path': path}
+        return self.do_rpc(sock, msg)
+
+    def syncdir_scandir(self, sock, path):
+        msg = {'type': 'syncdir_scandir', 'path': path}
         return self.do_rpc(sock, msg)
 
     def serve_forever(self):

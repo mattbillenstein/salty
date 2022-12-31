@@ -33,7 +33,7 @@ def hash_file(path):
 def elapsed(start):
     return round(time.time() - start, 6)
 
-def run(content, context, start, PATH, get_file):
+def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scandir):
     # these are the operators available in roles, they're nested functions here
     # so we can keep their signatures clean and collect the result of each
     # function...
@@ -274,6 +274,31 @@ def run(content, context, start, PATH, get_file):
         result['elapsed'] = elapsed(start)
         return result
 
+    def syncdir(src, dst, user=DEFAULT_USER, mode=0o755):
+        # add user and matching group if they do not exist
+        start = time.time()
+        result = {'cmd': f'syncdir({src}, {dst}, user={user})', 'rc': 0, 'changed': False, 'created': False}
+        results.append(result)
+        try:
+            # lookup uid/gid once, pass this down to the main function
+            user = pwd.getpwnam(user)
+
+            dst = PATH + dst
+            if not os.path.isdir(dst):
+                os.makedirs(dst, mode=mode)
+                result['created'] = True
+                result['changed'] = True
+
+            changes = _syncdir(src, dst, user, syncdir_get_file, syncdir_scandir)
+            print(changes)
+            result['changed'] = result['changed'] or len(changes) > 0
+            result['changes'] = changes
+        except Exception as e:
+            result['rc'] = 1
+            result['error'] = traceback.format_exc()
+
+        return result
+
     def is_changed():
         # return True if anything changed up to this point in the current
         # run - useful for restart commands....
@@ -294,6 +319,7 @@ def run(content, context, start, PATH, get_file):
         'shell': shell,
         'symlink': symlink,
         'useradd': useradd,
+        'syncdir': syncdir,
     }
     g.update(context)
     content = '\n'.join(IMPORTS) + '\n' + content
@@ -305,3 +331,103 @@ def run(content, context, start, PATH, get_file):
         results.append(result)
 
     return results, output
+
+def syncdir_scandir_local(src):
+    # scan directory and return metadata, on server and client
+    d = {}
+    for entry in os.scandir(src):
+        st = entry.stat(follow_symlinks=False)
+        attrs = {
+            'mode': st.st_mode & 0o777,
+            'size': st.st_size,
+            'mtime': st.st_mtime_ns,
+            'uid': st.st_uid,
+            'gid': st.st_gid,
+        }
+
+        # is_symlink comes before is_file here because is_file is True for a
+        # symlink...
+        if entry.is_symlink():
+            attrs['type'] = 'link'
+            attrs['target'] = os.readlink(os.path.join(src, entry.name))
+        elif entry.is_dir():
+            attrs['type'] = 'dir'
+        elif entry.is_file():
+            attrs['type'] = 'file'
+        else:
+            raise Exception(f'Unrecognized type {src}/{entry.name}')
+
+        d[entry.name] = attrs
+
+    return d
+
+def _syncdir(src, dst, user, syncdir_get_file, syncdir_scandir):
+    changes = []
+
+    s = syncdir_scandir(src)  # rpc
+    d = syncdir_scandir_local(dst)
+
+    # delete first if not in src, or different type, then remove so we copy
+    # later
+    for dname in list(d):
+        if not dname in s or \
+                d[dname]['type'] != s[dname]['type'] or \
+                s[dname]['type'] == 'link' and d[dname]['target'] != s[dname]['target']:
+            target = os.path.join(dst, dname)
+            dattrs = d.pop(dname)
+            if dattrs['type'] == 'dir':
+                shutil.rmtree(target)
+            else:
+                os.remove(target)
+            changes.append(('-', target))
+
+    for sname, sattrs in s.items():
+        source = os.path.join(src, sname)
+        target = os.path.join(dst, sname)
+
+        dattrs = d.get(sname)
+        if not dattrs:
+            # create file/link/dir if it doesn't exists, set utime/chown/chmod
+            changes.append(('+', target))
+            if sattrs['type'] == 'file':
+                x = syncdir_get_file(source)
+                with open(target, 'wb') as f:
+                    f.write(x['data'])
+                os.utime(target, ns=(sattrs['mtime'], sattrs['mtime']))
+            elif sattrs['type'] == 'link':
+                os.symlink(sattrs['target'], target)
+            elif sattrs['type'] == 'dir':
+                os.mkdir(target)
+
+            os.chown(target, user.pw_uid, user.pw_gid, follow_symlinks=False)
+            if sattrs['type'] != 'link':
+                os.chmod(target, sattrs['mode'])
+
+        elif dattrs['type'] == 'file' and any(dattrs[_] != sattrs[_] for _ in ('size', 'mtime')):
+            # copy changed file on mtime / size mismatch, set utime/chown/chmod
+            changes.append(('.', target))
+
+            x = syncdir_get_file(source)
+            with open(target, 'wb') as f:
+                f.write(x['data'])
+
+            os.utime(target, ns=(sattrs['mtime'], sattrs['mtime']))
+            os.chown(target, user.pw_uid, user.pw_gid, follow_symlinks=False)
+            if sattrs['type'] != 'link':
+                os.chmod(target, sattrs['mode'])
+
+        elif dattrs['uid'] != user.pw_uid or dattrs['gid'] != user.pw_gid:
+            # owner change
+            changes.append(('.', target))
+            os.chown(target, user.pw_uid, user.pw_gid, follow_symlinks=False)
+
+        elif sattrs['type'] != 'link' and dattrs['mode'] != sattrs['mode']:
+            # permissions change
+            changes.append(('.', target))
+            os.chmod(target, sattrs['mode'])
+
+        # lastly, recurse on directories
+        if sattrs['type'] == 'dir':
+            changes.extend(_syncdir(source, target, user, syncdir_get_file, syncdir_scandir))
+
+    return changes
