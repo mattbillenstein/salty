@@ -6,6 +6,7 @@ import stat
 import subprocess
 import time
 import traceback
+from collections import defaultdict
 
 import mako.exceptions
 import mako.template
@@ -295,7 +296,12 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
             dsts = syncdir_scandir_local(dst)
             changes = _syncdir(src, dst, user, srcs, dsts, syncdir_get_file)
             result['changed'] = result['changed'] or len(changes) > 0
-            result['changes'] = changes
+
+            # condense changes from every file to a count...
+            cngs = {'+': 0, '-': 0, '.': 0}
+            for typ, path in changes:
+                cngs[typ] += 1
+            result['changes'] = cngs
         except Exception as e:
             result['rc'] = 1
             result['error'] = traceback.format_exc()
