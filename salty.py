@@ -73,14 +73,14 @@ class Reactor(object):
             raise ConnectionError('Message too big')
 
         data = b''
-        for i in range(50):
-            with gevent.Timeout(timeout, CONNECTION_TIMEOUT):
+        with gevent.Timeout(timeout, CONNECTION_TIMEOUT):
+            while 1:
+                # read here seems to yield 16kb at a time...
                 data += sock.read(size - len(data))
-            if len(data) == size:
-                return msgpack.unpackb(data)
-            time.sleep(0.1)
+                if len(data) == size:
+                    return msgpack.unpackb(data)
 
-        raise ConnectionError('Could not read {size} bytes')
+        raise ConnectionError(f'Could not read {size} bytes after {timeout}s')
 
     def _writer(self, sock, q):
         while 1:
