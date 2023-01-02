@@ -103,19 +103,13 @@ class Reactor(object):
     def handle(self, sock, addr):
         print(f'Connection established {addr[0]}:{addr[1]}')
         client_id = None
-        timeout = SOCKET_TIMEOUT
         q = Queue()
         g = gevent.spawn(self._writer, sock, q)
         try:
             fh = sock.makefile(mode='b')
             while 1:
                 try:
-                    msg = self.recv_msg(fh, timeout)
-                    # timeout for the _next_ read -- if we're handling a long
-                    # running command like apply... Perhaps better ways to
-                    # handle this, default to a longer timeout, but shorter
-                    # timeouts for ping/pong?
-                    timeout = msg.get('timeout', SOCKET_TIMEOUT)
+                    msg = self.recv_msg(fh)
                     if msg['type'] == 'identify':
                         client_id = msg['id']
                         print(f'id:{client_id} facts:{msg["facts"]}')
