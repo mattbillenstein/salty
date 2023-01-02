@@ -36,14 +36,14 @@ CONNECTION_TIMEOUT = ConnectionTimeout('Connection timeout')
 SOCKET_TIMEOUT = 30
 
 _print = print
-def print(*args):
-    _print(*args)
+def print(*args, **kwargs):
+    _print(*args, **kwargs)
     sys.stdout.flush()
 
-def print_error(*args):
+def print_error(*args, **kwargs):
     if sys.stdout.isatty():
         args = [f'\033[1;31m{_}\033[0m' for _ in args]
-    print(*args)
+    print(*args, **kwargs)
 
 class Reactor(object):
 
@@ -69,7 +69,7 @@ class Reactor(object):
             raise ConnectionError('Socket dead')
 
         size = struct.unpack('!I', data)[0]
-        if size > 100_000_000:
+        if size > 500_000_000:
             raise ConnectionError('Message too big')
 
         data = b''
@@ -396,10 +396,18 @@ class SaltyClient(Reactor):
                     g.kill()
 
     def run(self, msg):
-        msg['timeout'] = 300
         sock = self.connect()
         self.send_msg(sock, msg)
-        return self.recv_msg(sock, timeout=msg['timeout'])
+
+        start = time.time()
+        while 1:
+            try:
+                msg = self.recv_msg(sock, timeout=5)
+                if msg['type'] == 'apply_result':
+                    return msg
+                print(f'Working {int(time.time()-start):} seconds ...', end='\r')
+            except ConnectionTimeout as e:
+                self.send_msg(sock, {'type': 'ping'})
 
 def main(mode, hostport, *args):
     start = time.time()

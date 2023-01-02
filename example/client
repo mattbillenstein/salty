@@ -1,4 +1,9 @@
 #!/bin/bash
 
+ID="server1"
+if [ "$1" != "" ]; then
+  ID="$1"
+fi
+
 source ../.venv/bin/activate
-../salty.py client 127.0.0.1:11110 --id=server1 --path=tmp/server1
+../salty.py client 127.0.0.1:11110 --id=$ID --path=tmp/$ID
