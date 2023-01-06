@@ -193,28 +193,42 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
         result['elapsed'] = elapsed(start)
         return result
 
-    def line_in_file(line, path, user=DEFAULT_USER, mode=0o644):
+    def line_in_file(line, path, user=DEFAULT_USER, mode=0o644, replace=''):
         start = time.time()
-        result = {'cmd': f'line_in_file({path}, {line})', 'rc': 0, 'changed': False, 'created': False}
+        result = {'cmd': f'line_in_file({path}, {line}, replace="{replace}")', 'rc': 0, 'changed': False, 'created': False}
         results.append(result)
 
         try:
             path = PATH + path
             if os.path.isfile(path):
-                with open(path, 'rb') as f:
-                    content = f.read()
+                with open(path, 'r') as f:
+                    lines = f.readlines()
             else:
                 result['created'] = True
-                content = b''
+                lines = []
                 os.makedirs(os.path.dirname(path), mode=0o755, exist_ok=True)
 
-            line = line.encode('utf8')
+            # kinda messy, but we want to make sure the given line is on a full
+            # line by itself, so make sure each line is terminated with a unix
+            # newline - I'm ignoring \r\n and \r with no intention of
+            # supporting Windows or Mac style text files...
+            if lines and not lines[-1].endswith('\n'):
+                lines[-1] += '\n'
 
-            if line not in content:
-                with open(path, 'wb') as f:
-                    if content and not content.endswith(b'\n'):
-                        content += 'b\n'
-                    f.write(content + line + b'\n')
+            # match and replace a complete line, otherwise we append
+            line += '\n'
+            replace += '\n'
+
+            if line not in lines:
+                if replace.strip() and replace in lines:
+                    lines[lines.index(replace)] = line
+                else:
+                    lines.append(line)
+
+                with open(path, 'w') as f:
+                    f.write(''.join(lines))
+
+                result['changed'] = True
 
             if _set_user_and_mode(path, user, mode):
                 result['changed'] = True
