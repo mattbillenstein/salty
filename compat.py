@@ -126,7 +126,7 @@ if sys.platform == 'darwin':
         assert p.returncode == 0, p
         ip = p.stdout.decode('utf8').strip()
         if ip and not ':' in ip:
-            if ip.split('.')[0] in ('10', '192'):
+            if any(ip.startswith(_) for _ in ('10.', '192.168.')):
                 d['private_ip'] = ip
             else:
                 d['public_ip'] = ip
@@ -154,11 +154,10 @@ elif sys.platform == 'linux':
             if ':' in ip:  # ipv6
                 continue
 
-            octet0 = ip.split('.')[0]
-            if octet0 in ('127', '172'):
+            if any(ip.startswith(_) for _ in ('127.', '172.')):
                 continue
 
-            if octet0 in ('10', '192'):
+            if any(ip.startswith(_) for _ in ('10.', '192.168.')):
                 d['private_ip'] = ip
             else:
                 d['public_ip'] = ip
