@@ -107,7 +107,7 @@ Below is some simple documentation for what is currently available in writing
 roles. I encourage you to consult the source in the "handle_run" method in
 salty.py around:
 
-  https://github.com/mattbillenstein/salty/blob/master/salty.py#L337
+  https://github.com/mattbillenstein/salty/blob/master/operators.py
 
 Common Imports available in roles/templates:
   os, os.path, json
@@ -128,6 +128,10 @@ Functions available in roles:
 
     symlink(src, dst):
       symlink src to dest on client
+
+    syncdir(src, dst, user=DEFAULT_USER, mode=0o755):
+      Synchronize a src dir on the server to the dst dir on the client - ala
+      rsync
 
   Shell commands:
     shell(cmds, **kw)
