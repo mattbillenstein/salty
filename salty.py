@@ -60,7 +60,7 @@ class Reactor(object):
             sock.put(data)
             return len(data)
         with gevent.Timeout(SOCKET_TIMEOUT, CONNECTION_TIMEOUT):
-            sock.send(data)
+            sock.sendall(data)
 
     def recv_msg(self, sock, timeout=SOCKET_TIMEOUT):
         with gevent.Timeout(timeout, CONNECTION_TIMEOUT):
@@ -86,7 +86,7 @@ class Reactor(object):
         while 1:
             msg = q.get()
             with gevent.Timeout(SOCKET_TIMEOUT, CONNECTION_TIMEOUT):
-                sock.send(msg)
+                sock.sendall(msg)
 
     def handle_future(self, msg, q):
         ar = self.futures.pop(msg['future_id'], None)
