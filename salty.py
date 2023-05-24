@@ -74,7 +74,7 @@ class Reactor(object):
 
         data = b''
         with gevent.Timeout(timeout, CONNECTION_TIMEOUT):
-            while 1:
+            for _ in range(10_000_000):
                 # read here seems to yield 16kb at a time...
                 data += sock.read(size - len(data))
                 if len(data) == size:
