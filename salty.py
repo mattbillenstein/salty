@@ -245,6 +245,7 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
             context = {k: v for k, v in msg.items() if k not in ('type', 'target', 'roles', 'skip')}
 
             for id, q2 in self.clients.items():
+                print('apply', id, q2)
                 if id not in hosts:
                     print(f'Apply missing host {id} in metadata')
                     continue
@@ -280,7 +281,10 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
             def dispatch(host_roles):
                 for role, tup in list(host_roles.items()):
                     if not isinstance(tup, dict):
+                        x = tup[-1]['context']
+                        print('rpc start', x['role'], x['id'])
                         host_roles[role] = self.do_rpc(*tup)['result']
+                        print('rpc complete', x['role'], x['id'])
 
             greenlets = []
             for id, host_roles in results.items():
@@ -378,6 +382,8 @@ class SaltyClient(Reactor):
 
                 self.send_msg(sock, {'type': 'identify', 'id': self.id, 'facts': self.get_facts()})
                 while 1:
+                    if g.dead:
+                        break
                     self.send_msg(sock, {'type': 'ping'})
                     time.sleep(5)
             except KeyboardInterrupt:
