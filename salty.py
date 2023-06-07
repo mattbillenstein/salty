@@ -109,6 +109,10 @@ class Reactor(object):
             fh = sock.makefile(mode='b')
             while 1:
                 try:
+                    # if writer dead, break and eventually close the socket...
+                    if g.dead:
+                        break
+
                     msg = self.recv_msg(fh)
                     if msg['type'] == 'identify':
                         client_id = msg['id']
@@ -124,6 +128,7 @@ class Reactor(object):
             if client_id:
                 self.clients.pop(client_id)
             g.kill()
+            sock.close()
 
 class SaltyServer(gevent.server.StreamServer, Reactor):
     def __init__(self, *args, **kwargs):
@@ -382,6 +387,7 @@ class SaltyClient(Reactor):
 
                 self.send_msg(sock, {'type': 'identify', 'id': self.id, 'facts': self.get_facts()})
                 while 1:
+                    # if the handler died, break - the socket should be closed in handle
                     if g.dead:
                         break
                     self.send_msg(sock, {'type': 'ping'})
