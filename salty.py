@@ -311,6 +311,7 @@ class SaltyClient(Reactor):
         self.keyroot = keyroot
         self.path = path
         self.futures = {}
+        self._last_pong = time.time()
 
     def connect(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -334,7 +335,7 @@ class SaltyClient(Reactor):
         return facts
 
     def handle_pong(self, msg, q):
-        pass
+        self._last_pong = time.time()
 
     def handle_run(self, msg, q):
         print(f'Run {msg["context"]["id"]} {msg["context"]["role"]}')
@@ -387,11 +388,18 @@ class SaltyClient(Reactor):
 
                 self.send_msg(sock, {'type': 'identify', 'id': self.id, 'facts': self.get_facts()})
                 while 1:
-                    # if the handler died, break - the socket should be closed in handle
+                    # if the handler died, break
                     if g.dead:
                         break
+
+                    now = time.time()
                     self.send_msg(sock, {'type': 'ping'})
                     time.sleep(5)
+
+                    # if no pong back, break
+                    if (self._last_pong - now) > 6:
+                        print('MISSING PONG', self._last_pong - now)
+                        break
             except KeyboardInterrupt:
                 break
             except Exception:
@@ -400,6 +408,7 @@ class SaltyClient(Reactor):
             finally:
                 if g:
                     g.kill()
+                sock.close()
 
     def run(self, msg):
         sock = self.connect()
