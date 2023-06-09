@@ -399,11 +399,17 @@ class SaltyClient(Reactor):
         return self.do_rpc(sock, msg)
 
     def serve_forever(self):
-        sock = self.connect()
-        try:
-            self.handle(sock, self.addr, is_client=True)
-        finally:
-            sock.close()
+        while 1:
+            try:
+                sock = self.connect()
+                self.handle(sock, self.addr, is_client=True)
+            except KeyboardInterrupt:
+                break
+            except Exception:
+                print(f'Exception in client serve: {traceback.format_exc()}')
+                time.sleep(3)
+            finally:
+                sock.close()
 
     def run(self, msg):
         sock = self.connect()
