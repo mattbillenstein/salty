@@ -88,6 +88,17 @@ class Reactor(object):
             with gevent.Timeout(SOCKET_TIMEOUT, CONNECTION_TIMEOUT):
                 sock.sendall(msg)
 
+    def _pinger(self, q):
+        while 1:
+            now = time.time()
+            self.send_msg(q, {'type': 'ping'})
+            time.sleep(5)
+
+            # if no pong back, break
+            if (self._last_pong - now) > 6:
+                print('MISSING PONG', self._last_pong - now)
+                break
+
     def handle_future(self, msg, q):
         ar = self.futures.pop(msg['future_id'], None)
         if ar:
@@ -100,17 +111,23 @@ class Reactor(object):
         else:
             print(f'Unhandled message: {msg}')
 
-    def handle(self, sock, addr):
+    def handle(self, sock, addr, is_client=False):
         print(f'Connection established {addr[0]}:{addr[1]}')
         client_id = None
         q = Queue()
         g = gevent.spawn(self._writer, sock, q)
+
+        p = None
+        if is_client:
+            p = gevent.spawn(self._pinger, q)
+            self.send_msg(q, {'type': 'identify', 'id': self.id, 'facts': self.get_facts()})
+
         try:
             fh = sock.makefile(mode='b')
             while 1:
                 try:
                     # if writer dead, break and eventually close the socket...
-                    if g.dead:
+                    if g.dead or (p and p.dead):
                         break
 
                     msg = self.recv_msg(fh)
@@ -128,6 +145,8 @@ class Reactor(object):
             if client_id:
                 self.clients.pop(client_id)
             g.kill()
+            if p:
+                p.kill()
             sock.close()
 
 class SaltyServer(gevent.server.StreamServer, Reactor):
@@ -380,35 +399,11 @@ class SaltyClient(Reactor):
         return self.do_rpc(sock, msg)
 
     def serve_forever(self):
-        while 1:
-            try:
-                g = None
-                sock = self.connect()
-                g = gevent.spawn(self.handle, sock, self.addr)
-
-                self.send_msg(sock, {'type': 'identify', 'id': self.id, 'facts': self.get_facts()})
-                while 1:
-                    # if the handler died, break
-                    if g.dead:
-                        break
-
-                    now = time.time()
-                    self.send_msg(sock, {'type': 'ping'})
-                    time.sleep(5)
-
-                    # if no pong back, break
-                    if (self._last_pong - now) > 6:
-                        print('MISSING PONG', self._last_pong - now)
-                        break
-            except KeyboardInterrupt:
-                break
-            except Exception:
-                print(f'Exception in client serve: {traceback.format_exc()}')
-                time.sleep(3)
-            finally:
-                if g:
-                    g.kill()
-                sock.close()
+        sock = self.connect()
+        try:
+            self.handle(sock, self.addr, is_client=True)
+        finally:
+            sock.close()
 
     def run(self, msg):
         sock = self.connect()
