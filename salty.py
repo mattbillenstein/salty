@@ -142,7 +142,7 @@ class Reactor(object):
                     print(f'Connection lost {addr[0]}:{addr[1]}')
                     break
         finally:
-            if client_id:
+            if not is_client and self.clients.get(client_id) is q:
                 self.clients.pop(client_id)
             g.kill()
             if p:
