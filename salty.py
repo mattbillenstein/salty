@@ -425,11 +425,14 @@ class SaltyClient(Reactor):
             except ConnectionTimeout as e:
                 self.send_msg(sock, {'type': 'ping'})
 
-def main(mode, hostport, *args):
+def main(mode, *args):
     start = time.time()
 
-    hostport = hostport.split(':')
-    hostport = (hostport[0], int(hostport[1]))
+    if mode in ('server', 'client', 'cli'):
+        hostport = args[0]
+        args = args[1:]
+        hostport = hostport.split(':')
+        hostport = (hostport[0], int(hostport[1]))
 
     verbose = 0
     opts = {}
@@ -453,6 +456,11 @@ def main(mode, hostport, *args):
             print('Exit.')
     elif mode == 'client':
         SaltyClient(hostport, **opts).serve_forever()
+    elif mode == 'genkey':
+        # FIXME, use openssl python module...
+        os.system('openssl req -new -newkey rsa:4096 -days 3650 -nodes -x509 -subj "/C=US/ST=CA/L=SF/O=A/CN=B" -keyout key.pem -out cert.pem')
+        with open('crypto.pass', 'w') as f:
+            f.write(hash_data(os.urandom(1024)))
     elif mode in ('cli', 'bootstrap'):
         if mode == 'bootstrap':
             server_opts = {k: v for k, v in opts.items() if k in ('fileroot', 'keyroot')}

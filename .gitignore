@@ -11,3 +11,8 @@ __pycache__
 
 # vim
 *.swp
+
+# nuitka
+salty.build
+salty.Linux-*
+salty.Darwin-*
