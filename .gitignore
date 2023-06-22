@@ -14,5 +14,7 @@ __pycache__
 
 # nuitka
 salty.build
+salty.dist
+salty.onefile-*
 salty.Linux-*
 salty.Darwin-*
