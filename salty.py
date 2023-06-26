@@ -428,7 +428,7 @@ class SaltyClient(Reactor):
 def main(mode, *args):
     start = time.time()
 
-    if mode in ('server', 'client', 'cli'):
+    if mode != 'genkey':
         hostport = args[0]
         args = args[1:]
         hostport = hostport.split(':')
