@@ -12,9 +12,7 @@ __pycache__
 # vim
 *.swp
 
-# nuitka
-salty.build
-salty.dist
-salty.onefile-*
-salty.Linux-*
-salty.Darwin-*
+# pyinstaller
+build
+dist
+*.spec

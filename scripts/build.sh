@@ -5,4 +5,4 @@ SCRIPTPATH="$(pwd)"
 popd > /dev/null
 
 source $SCRIPTPATH/.venv/bin/activate
-nuitka3 --standalone --onefile --output-filename="salty.$(uname -s)-$(uname -m)" salty.py
+pyinstaller --onefile salty.py

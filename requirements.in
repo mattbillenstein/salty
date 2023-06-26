@@ -1,7 +1,7 @@
 gevent
 mako
 msgpack
-nuitka
-pynacl
 pip-tools
+pyinstaller
+pynacl
 requests
