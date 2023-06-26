@@ -14,4 +14,6 @@ popd > /dev/null
 source $SCRIPTPATH/.venv/bin/activate
 pyinstaller --onefile salty.py
 
-mv dist/salty dist/salty-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed -e 's/x86_64/amd64/')
+OS="$(uname -s | tr '[:upper:]' '[:lower:]' | sed -e 's/darwin/macos/')"
+ARCH="-$(uname -m | sed -e 's/x86_64/amd64/')"
+mv dist/salty dist/salty-$OS-$ARCH
