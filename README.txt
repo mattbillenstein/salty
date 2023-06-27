@@ -1,7 +1,7 @@
 Salty - devops inspired by Saltstack, but simpler.
 
 This is an experiment to see with how little code I could build a useful
-SaltStack-like deployment system. As of Nov 2022, that is about 1050 LOC, and
+SaltStack-like deployment system. As of July 2023, that is about 1300 LOC, and
 I'm using it on a couple projects in production/staging/dev environments. It
 supports Linux (primary tested on Ubuntu LTS) and MacOS using Python3.
 
@@ -14,6 +14,9 @@ hosts - ie prod, staging, etc), and environments (collections of vars that
 apply to a host). The templating language is also Python (via Mako); so this is
 probably the most complete Python all-in deployment system you can use. There
 is very little to learn other than Python itself.
+
+And, it can be deployed as a single binary packaged using PyInstaller - see
+releases for those packages.
 
 You interact with the system via the CLI by instantiating a client to send a
 request to the server, typically via a shell script:
@@ -104,8 +107,8 @@ little actual work and I/O as possible.
 See the example directory for a simple functioning example you can run locally.
 
 Below is some simple documentation for what is currently available in writing
-roles. I encourage you to consult the source in the "handle_run" method in
-salty.py around:
+roles and I encourage you to consult the source in the "run" method in
+operators.py:
 
   https://github.com/mattbillenstein/salty/blob/master/operators.py
 
