@@ -4,4 +4,3 @@ msgpack
 pip-tools
 pyinstaller
 pynacl
-requests

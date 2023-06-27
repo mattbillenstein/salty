@@ -22,7 +22,6 @@ from pprint import pprint
 import gevent
 import gevent.server
 import msgpack
-import requests
 from gevent.event import AsyncResult
 
 import crypto
