@@ -22,7 +22,7 @@ request to the server, typically via a shell script:
   #!/bin/bash
 
   VERSION="$(git rev-parse HEAD)"
-  sudo bash -c "source /opt/wve/bin/activate; /opt/w/salty/src/salty.py cli 127.0.0.1:11111 --keyroot=/opt/w/salty/keys type=apply skip=ve version=$VERSION $*"
+  sudo /opt/salty/salty cli 127.0.0.1:11111 --keyroot=/opt/salty/keys type=apply version=$VERSION $*
 
 By default it reports elapsed time, errors, and roles changed per host:
 
