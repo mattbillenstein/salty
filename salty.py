@@ -248,7 +248,9 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
                     # if target is cluster
                     if id not in self.facts:
                         if target_cluster and target_cluster == cluster:
-                            results[id][''] = {'results': [{'rc': 1, 'cmd': '...host missing...', 'elapsed': 0.0, 'changed': False}], 'elapsed': 0.0}
+                            if not v.get('ignore_missing', False):
+                                results[id][''] = {'results': [{'rc': 1, 'cmd': '...host missing...', 'elapsed': 0.0, 'changed': False}], 'elapsed': 0.0}
+
                         continue
 
                     v['cluster'] = cluster
