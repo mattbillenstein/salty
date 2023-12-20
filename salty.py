@@ -26,7 +26,7 @@ from gevent.event import AsyncResult
 
 import crypto
 import operators
-from compat import get_ip_addresses
+from compat import get_cpu_count, get_ip_addresses, get_mem_gb
 from operators import elapsed, hash_data
 
 class ConnectionTimeout(Exception):
@@ -192,7 +192,10 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
 
             msg['mode'] = os.stat(path).st_mode & 0o777
         except Exception:
-            msg['error'] = traceback.format_exc()
+            print('Exception handling msg in handle_get_file:', msg)
+            tb = traceback.format_exc().strip()
+            print(tb)
+            msg['error'] = tb
 
         self.send_msg(q, msg)
 
@@ -204,7 +207,10 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
                 data = f.read()
             msg['data'] = data
         except Exception:
-            msg['error'] = traceback.format_exc()
+            print('Exception handling msg in handle_syncdir_get_file:', msg)
+            tb = traceback.format_exc().strip()
+            print(tb)
+            msg['error'] = tb
 
         self.send_msg(q, msg)
 
@@ -214,7 +220,10 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
         try:
             msg['data'] = operators.syncdir_scandir_local(msg['path'])
         except Exception:
-            msg['error'] = traceback.format_exc()
+            print('Exception handling msg in handle_syncdir_scandir:', msg)
+            tb = traceback.format_exc().strip()
+            print(tb)
+            msg['error'] = tb
 
         self.send_msg(q, msg)
 
@@ -319,7 +328,10 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
             gevent.wait(greenlets)
 
         except:
-            msg_result['error'] = traceback.format_exc()
+            print('Exception handling msg in handle_apply:', msg)
+            tb = traceback.format_exc().strip()
+            print(tb)
+            msg_result['error'] = tb
 
         msg_result['elapsed'] = elapsed(start)
         self.send_msg(q, msg_result)
@@ -347,6 +359,8 @@ class SaltyClient(Reactor):
         facts = {}
 
         facts.update(get_ip_addresses())
+        facts['cpu_count'] = get_cpu_count()
+        facts['mem_gb'] = get_mem_gb()
 
         uname = platform.uname()
         facts['kernel'] = uname.system
@@ -407,7 +421,8 @@ class SaltyClient(Reactor):
             except KeyboardInterrupt:
                 break
             except Exception:
-                print(f'Exception in client serve: {traceback.format_exc()}')
+                tb = traceback.format_exc().strip()
+                print('Exception in client serve:', tb)
                 time.sleep(3)
             finally:
                 sock.close()
@@ -428,6 +443,10 @@ class SaltyClient(Reactor):
 
 def main(mode, *args):
     start = time.time()
+
+    if mode == 'help' or mode not in ('genkey', 'server', 'client', 'cli', 'bootstrap'):
+        print('Usage: ./salty.py (help | genkey | server | client | cli | bootstrap) [args]')
+        sys.exit(0)
 
     if mode != 'genkey':
         hostport = args[0]

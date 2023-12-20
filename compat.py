@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import os
 import os.path
 import subprocess
 import sys
@@ -133,6 +134,12 @@ if sys.platform == 'darwin':
 
         return d
 
+    def get_cpu_count():
+        return os.cpu_count()
+
+    def get_mem_gb():
+        return round(os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES') / 2**30, 1)
+
 elif sys.platform == 'linux':
     import pwd
     import grp
@@ -163,12 +170,20 @@ elif sys.platform == 'linux':
                 d['public_ip'] = ip
 
         return d
+
+    def get_cpu_count():
+        return len(os.sched_getaffinity(0))
+
+    def get_mem_gb():
+        return round(os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES') / 2**30, 1)
 else:
     assert 0
 
 if __name__ == '__main__':
     root = pwd.getpwnam('root')
-    print(root)
-    print(grp.getgrgid(root.pw_gid))
-    print(useradd_command('foo', True))
-    print(get_ip_addresses())
+    print("Root user:   ", root)
+    print("Root group:  ", grp.getgrgid(root.pw_gid))
+    print("Useradd cmd: ", useradd_command('foo', True))
+    print("IP addresses:", get_ip_addresses())
+    print("CPUs:        ", get_cpu_count())
+    print("RAM GB:      ", get_mem_gb())
