@@ -34,10 +34,16 @@ class ConnectionTimeout(Exception):
 CONNECTION_TIMEOUT = ConnectionTimeout('Connection timeout')
 SOCKET_TIMEOUT = 30
 
-_print = print
-def print(*args, **kwargs):
-    _print(*args, **kwargs)
+def log(*args, **kwargs):
+    t = time.time()
+    ms = f'{int(t % 1 * 1000):03d}'
+    print(time.strftime('%Y-%m-%dT%H:%M:%S.', time.localtime(t)) + ms, *args, **kwargs)
     sys.stdout.flush()
+
+def log_error(*args, **kwargs):
+    if sys.stdout.isatty():
+        args = [f'\033[1;31m{_}\033[0m' for _ in args]
+    log(*args, **kwargs)
 
 def print_error(*args, **kwargs):
     if sys.stdout.isatty():
@@ -95,7 +101,7 @@ class Reactor(object):
 
             # if no pong back, break
             if (self._last_pong - now) > 6:
-                print('MISSING PONG', self._last_pong - now)
+                log_error('MISSING PONG', self._last_pong - now)
                 break
 
     def handle_future(self, msg, q):
@@ -108,10 +114,10 @@ class Reactor(object):
         if method:
             gevent.spawn(method, msg, q)
         else:
-            print(f'Unhandled message: {msg}')
+            log_error(f'Unhandled message: {msg}')
 
     def handle(self, sock, addr, is_client=False):
-        print(f'Connection established {addr[0]}:{addr[1]}')
+        log(f'Connection established {addr[0]}:{addr[1]}')
         client_id = None
         q = Queue()
         g = gevent.spawn(self._writer, sock, q)
@@ -132,13 +138,13 @@ class Reactor(object):
                     msg = self.recv_msg(fh)
                     if msg['type'] == 'identify':
                         client_id = msg['id']
-                        print(f'id:{client_id} facts:{msg["facts"]}')
+                        log(f'id:{client_id} facts:{msg["facts"]}')
                         self.clients[client_id] = q
                         self.facts[client_id] = msg['facts']
                     else:
                         self.handle_msg(msg, q)
                 except OSError:
-                    print(f'Connection lost {addr[0]}:{addr[1]}')
+                    log(f'Connection lost {addr[0]}:{addr[1]}')
                     break
         finally:
             if not is_client and self.clients.get(client_id) is q:
@@ -192,7 +198,7 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
 
             msg['mode'] = os.stat(path).st_mode & 0o777
         except Exception:
-            print('Exception handling msg in handle_get_file:', msg)
+            log_error('Exception handling msg in handle_get_file:', msg)
             tb = traceback.format_exc().strip()
             print(tb)
             msg['error'] = tb
@@ -207,7 +213,7 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
                 data = f.read()
             msg['data'] = data
         except Exception:
-            print('Exception handling msg in handle_syncdir_get_file:', msg)
+            log_error('Exception handling msg in handle_syncdir_get_file:', msg)
             tb = traceback.format_exc().strip()
             print(tb)
             msg['error'] = tb
@@ -220,7 +226,7 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
         try:
             msg['data'] = operators.syncdir_scandir_local(msg['path'])
         except Exception:
-            print('Exception handling msg in handle_syncdir_scandir:', msg)
+            log_error('Exception handling msg in handle_syncdir_scandir:', msg)
             tb = traceback.format_exc().strip()
             print(tb)
             msg['error'] = tb
@@ -279,9 +285,8 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
             context = {k: v for k, v in msg.items() if k not in ('type', 'target', 'roles', 'skip')}
 
             for id, q2 in self.clients.items():
-                print('apply', id, q2)
                 if id not in hosts:
-                    print(f'Apply missing host {id} in metadata')
+                    log_error(f'Apply missing host {id} in metadata')
                     continue
 
                 if target_cluster and hosts[id]['cluster'] != target_cluster:
@@ -316,9 +321,10 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
                 for role, tup in list(host_roles.items()):
                     if not isinstance(tup, dict):
                         x = tup[-1]['context']
-                        print('rpc start', x['role'], x['id'])
-                        host_roles[role] = self.do_rpc(*tup)['result']
-                        print('rpc complete', x['role'], x['id'])
+                        t = time.time()
+                        host_roles[role] = m = self.do_rpc(*tup)['result']
+                        rc = sum(_['rc'] for _ in m['results'])
+                        log('RPC', x['id'], x['role'], rc, elapsed(t))
 
             greenlets = []
             for id, host_roles in results.items():
@@ -328,7 +334,7 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
             gevent.wait(greenlets)
 
         except:
-            print('Exception handling msg in handle_apply:', msg)
+            log_error('Exception handling msg in handle_apply:', msg)
             tb = traceback.format_exc().strip()
             print(tb)
             msg_result['error'] = tb
@@ -372,7 +378,6 @@ class SaltyClient(Reactor):
         self._last_pong = time.time()
 
     def handle_run(self, msg, q):
-        print(f'Run {msg["context"]["id"]} {msg["context"]["role"]}')
         start = time.time()
 
         def get_file(path, **opts):
@@ -400,6 +405,9 @@ class SaltyClient(Reactor):
         msg['result'] = {'results': results, 'output': '\n'.join(output), 'elapsed': elapsed(start)}
         self.send_msg(q, msg)
 
+        rc = sum(_['rc'] for _ in results)
+        log(f'Run {msg["context"]["id"]} {msg["context"]["role"]} {rc} {msg["result"]["elapsed"]}')
+
     def get_file(self, sock, path, **opts):
         msg = {'type': 'get_file', 'path': path}
         msg.update(opts)
@@ -422,7 +430,7 @@ class SaltyClient(Reactor):
                 break
             except Exception:
                 tb = traceback.format_exc().strip()
-                print('Exception in client serve:', tb)
+                log_error('Exception in client serve:\n', tb)
                 time.sleep(3)
             finally:
                 sock.close()
@@ -437,7 +445,7 @@ class SaltyClient(Reactor):
                 msg = self.recv_msg(sock, timeout=5)
                 if msg['type'] == 'apply_result':
                     return msg
-                print(f'Working {int(time.time()-start):} seconds ...', end='\r')
+                log(f'Working {int(time.time()-start):} seconds ...', end='\r')
             except ConnectionTimeout as e:
                 self.send_msg(sock, {'type': 'ping'})
 
@@ -473,7 +481,7 @@ def main(mode, *args):
         try:
             SaltyServer(hostport, **opts).serve_forever()
         except KeyboardInterrupt:
-            print('Exit.')
+            log('Exit.')
     elif mode == 'client':
         SaltyClient(hostport, **opts).serve_forever()
     elif mode == 'genkey':
@@ -519,7 +527,7 @@ def main(mode, *args):
         result = SaltyClient(hostport, **opts).run(msg)
 
         if result.get('error'):
-            print(f'Exception in apply:\n{result["error"]}')
+            log_error(f'Exception in apply:\n{result["error"]}')
             sys.exit(1)
 
         for host, roles in result['results'].items():
