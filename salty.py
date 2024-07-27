@@ -26,7 +26,7 @@ from gevent.event import AsyncResult
 
 import crypto
 import operators
-from compat import get_cpu_count, get_ip_addresses, get_mem_gb
+from compat import get_cpu_count, get_networking, get_mem_gb
 from operators import elapsed, hash_data
 
 class ConnectionTimeout(Exception):
@@ -270,9 +270,13 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
 
                     v['cluster'] = cluster
                     v['facts'] = self.facts[id]
+                    # vars precedence - env, cluster, host - save off host vars
+                    # first and apply last...
+                    vars = v.get('vars', {})
                     v['vars'] = {}
                     v['vars'].update(meta['envs'][v['env']])
                     v['vars'].update(meta['clusters'][cluster])
+                    v['vars'].update(vars)
                     hosts[id] = v
 
             crypto.decrypt_dict(meta, self.crypto_pass)
@@ -324,7 +328,7 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
                         t = time.time()
                         host_roles[role] = m = self.do_rpc(*tup)['result']
                         rc = sum(_['rc'] for _ in m['results'])
-                        log('RPC', x['id'], x['role'], rc, elapsed(t))
+                        log('RPC', x['id'], x['role'], rc, f'{elapsed(t):.6f}')
 
             greenlets = []
             for id, host_roles in results.items():
@@ -364,7 +368,7 @@ class SaltyClient(Reactor):
     def get_facts(self):
         facts = {}
 
-        facts.update(get_ip_addresses())
+        facts['networking'] = get_networking()
         facts['cpu_count'] = get_cpu_count()
         facts['mem_gb'] = get_mem_gb()
 
@@ -406,7 +410,7 @@ class SaltyClient(Reactor):
         self.send_msg(q, msg)
 
         rc = sum(_['rc'] for _ in results)
-        log(f'Run {msg["context"]["id"]} {msg["context"]["role"]} {rc} {msg["result"]["elapsed"]}')
+        log(f'Run {msg["context"]["id"]} {msg["context"]["role"]} {rc} {msg["result"]["elapsed"]:.6f}')
 
     def get_file(self, sock, path, **opts):
         msg = {'type': 'get_file', 'path': path}

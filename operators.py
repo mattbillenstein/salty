@@ -41,18 +41,47 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
     results = []
     context = dict(context)
 
-    def get_ips(role, key='private_ip'):
+    def my_ip(key='ipv4', filter='is_private'):
+        network = None
+        if filter == 'is_private':
+            network = context['me']['vars'].get('private_network')
+
+        L = [
+            _ for _ in context['me']['facts']['networking']['interfaces']
+            if _[filter] and (not network or _[key + '_network'] == network)
+        ]
+        assert L, f'Missing ip address for {key} {filter}'
+        if len(L) > 1:
+            print(f'Warning: Found multiple ip addresses for {key} {filter} {L}')
+            L.sort(key=lambda x: x[key])
+
+        return L[0][key]
+
+    context['my_ip'] = my_ip
+
+    def get_ips(role, key='ipv4', filter='is_private'):
         # return ip addresses of hosts serving the role in the same
         # cluster...
+
+        # filter by host private network if set, otherwise we'll just get the
+        # first private ip
+        network = None
+        if filter == 'is_private':
+            network = context['me']['vars'].get('private_network')
+
         ips = []
         cluster = context['me']['cluster']
-        if cluster == 'local':
-            if role in context['me']['roles']:
-                ips.append('127.0.0.1')
-            return ips
         for id, h in context['hosts'].items():
             if h['cluster'] == cluster and role in h['roles']:
-                ips.append(h['facts'][key])
+                L = [
+                    _ for _ in h['facts']['networking']['interfaces']
+                    if _[filter] and (not network or _[key + '_network'] == network)
+                ]
+                assert L, f'Missing ip address for role {role} {key} {filter}'
+                if len(L) > 1:
+                    print(f'Warning: Found multiple ip addresses for role {role} {key} {filter} {L}')
+                    L.sort(key=lambda x: x[key])
+                ips.append(L[0][key])
         ips.sort()
         return ips
 

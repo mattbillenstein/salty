@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 
+import ipaddress
+import json
 import os
 import os.path
+import re
 import subprocess
 import sys
 
@@ -121,18 +124,37 @@ if sys.platform == 'darwin':
         grp._cache = None
         return '; '.join(cmds)
 
-    def get_ip_addresses():
-        d = {'private_ip': '127.0.0.1', 'public_ip': None}
-        p = subprocess.run("ifconfig | grep 'inet ' | grep -Fv 127.0.0.1 | awk '{print $2}' | head -1", shell=True, capture_output=True)
-        assert p.returncode == 0, p
-        ip = p.stdout.decode('utf8').strip()
-        if ip and not ':' in ip:
-            if any(ip.startswith(_) for _ in ('10.', '192.168.')):
-                d['private_ip'] = ip
-            else:
-                d['public_ip'] = ip
+    def get_networking():
+        device = re.compile('^([a-zA-Z0-9]+): ')
+        mac = re.compile('^\s+ether ([0-9a-f:]{17})')
+        inet = re.compile('^\s+inet[6]{0,1} ([a-f0-9\.:]+)(?:%[a-zA-Z0-9]+)? (netmask|prefixlen) ([a-f0-9x]+) ')
 
-        return d
+        p = subprocess.run("ifconfig", shell=True, capture_output=True)
+        assert p.returncode == 0, p
+        lines = p.stdout.decode('utf8').strip().split('\n')
+
+        L = []
+        for line in lines:
+            if mobj := device.match(line):
+                d = {'device': mobj.group(1)}
+                L.append(d)
+            elif mobj := mac.match(line):
+                d['mac'] = mobj.group(1)
+            elif mobj := inet.match(line):
+                print(mobj.groups())
+                ip, key, netmask = mobj.groups()
+                if netmask.startswith('0x'):
+                    netmask = str(bin(int(netmask, 16)).count('1'))
+                ip += '/' + netmask
+
+                addr = ipaddress.ip_interface(ip)
+                d[f'ipv{addr.version}'] = str(addr.ip)
+                d[f'ipv{addr.version}_network'] = str(addr.network)
+                for flag in dir(addr):
+                    if flag.startswith('is_'):
+                        d[flag] = getattr(addr, flag)
+
+        return {'interfaces': L}
 
     def get_cpu_count():
         return os.cpu_count()
@@ -153,23 +175,32 @@ elif sys.platform == 'linux':
             system = ' --system' if system else ''
             return f'useradd --create-home --user-group{system} --shell /bin/bash {username}'
 
-    def get_ip_addresses():
-        d = {'private_ip': '127.0.0.1', 'public_ip': None}
-        p = subprocess.run(["awk '/32 host/ { print f } {f=$2}' /proc/net/fib_trie | sort -u"], shell=True, capture_output=True)
+    def get_networking():
+        device = re.compile('^[0-9]+: ([a-zA-Z0-9]+): <')
+        link = re.compile('^\s+link/[^ ]+ ([0-9a-f:]{17}) ')
+        inet = re.compile('^\s+inet[6]{0,1} ([a-f0-9\.:]+/[0-9]+) ')
+
+        p = subprocess.run("ip addr", shell=True, capture_output=True)
         assert p.returncode == 0, p
-        for ip in p.stdout.decode('utf8').strip().split('\n'):
-            if ':' in ip:  # ipv6
-                continue
 
-            if any(ip.startswith(_) for _ in ('127.', '172.')):
-                continue
+        lines = p.stdout.decode('utf8').strip().split('\n')
 
-            if any(ip.startswith(_) for _ in ('10.', '192.168.')):
-                d['private_ip'] = ip
-            else:
-                d['public_ip'] = ip
+        L = []
+        for line in lines:
+            if mobj := device.match(line):
+                d = {'device': mobj.group(1)}
+                L.append(d)
+            elif mobj := link.match(line):
+                d['mac'] = mobj.group(1)
+            elif mobj := inet.match(line):
+                addr = ipaddress.ip_interface(mobj.group(1))
+                d[f'ipv{addr.version}'] = str(addr.ip)
+                d[f'ipv{addr.version}_network'] = str(addr.network)
+                for flag in dir(addr):
+                    if flag.startswith('is_'):
+                        d[flag] = getattr(addr, flag)
 
-        return d
+        return {'interfaces': L}
 
     def get_cpu_count():
         return len(os.sched_getaffinity(0))
@@ -184,6 +215,6 @@ if __name__ == '__main__':
     print("Root user:   ", root)
     print("Root group:  ", grp.getgrgid(root.pw_gid))
     print("Useradd cmd: ", useradd_command('foo', True))
-    print("IP addresses:", get_ip_addresses())
+    print("Networking:  ", json.dumps(get_networking(), indent=2))
     print("CPUs:        ", get_cpu_count())
     print("RAM GB:      ", get_mem_gb())
