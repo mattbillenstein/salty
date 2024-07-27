@@ -150,9 +150,9 @@ if sys.platform == 'darwin':
                 addr = ipaddress.ip_interface(ip)
                 d[f'ipv{addr.version}'] = str(addr.ip)
                 d[f'ipv{addr.version}_network'] = str(addr.network)
-                for flag in dir(addr):
-                    if flag.startswith('is_'):
-                        d[flag] = getattr(addr, flag)
+                d['is_loopback'] = addr.is_loopback
+                d['is_private'] = addr.is_private and not addr.is_loopback
+                d['is_public'] = addr.is_global
 
         return {'interfaces': L}
 
@@ -196,9 +196,9 @@ elif sys.platform == 'linux':
                 addr = ipaddress.ip_interface(mobj.group(1))
                 d[f'ipv{addr.version}'] = str(addr.ip)
                 d[f'ipv{addr.version}_network'] = str(addr.network)
-                for flag in dir(addr):
-                    if flag.startswith('is_'):
-                        d[flag] = getattr(addr, flag)
+                d['is_loopback'] = addr.is_loopback
+                d['is_private'] = addr.is_private and not addr.is_loopback
+                d['is_public'] = addr.is_global
 
         return {'interfaces': L}
 
