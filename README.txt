@@ -178,7 +178,10 @@ Context available in templates:
   version:
     Current git HEAD
 
-  get_ips(role, key='private_ip'):
+  my_ip():
+    get my (private) ip address
+
+  get_ips(role):
     get a list of ip addresses by role
 
 Crypto:
