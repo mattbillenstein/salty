@@ -127,7 +127,7 @@ if sys.platform == 'darwin':
     def get_networking():
         device = re.compile('^([a-zA-Z0-9]+): ')
         mac = re.compile('^\s+ether ([0-9a-f:]{17})')
-        inet = re.compile('^\s+inet[6]{0,1} ([a-f0-9\.:]+)(?:%[a-zA-Z0-9]+)? (netmask|prefixlen) ([a-f0-9x]+) ')
+        inet = re.compile('^\s+inet[6]{0,1} ([a-f0-9\.:]+)(?:%[a-zA-Z0-9]+)? (netmask|prefixlen) ([a-f0-9x]+)')
 
         p = subprocess.run("ifconfig", shell=True, capture_output=True)
         assert p.returncode == 0, p
@@ -141,19 +141,21 @@ if sys.platform == 'darwin':
             elif mobj := mac.match(line):
                 d['mac'] = mobj.group(1)
             elif mobj := inet.match(line):
-                print(mobj.groups())
                 ip, key, netmask = mobj.groups()
                 if netmask.startswith('0x'):
                     netmask = str(bin(int(netmask, 16)).count('1'))
                 ip += '/' + netmask
 
                 addr = ipaddress.ip_interface(ip)
-                d[f'ipv{addr.version}'] = str(addr.ip)
-                d[f'ipv{addr.version}_network'] = str(addr.network)
-                d['is_loopback'] = addr.is_loopback
-                d['is_private'] = addr.is_private and not addr.is_loopback
-                d['is_public'] = addr.is_global
+                if f'ipv{addr.version}' not in d:  # take first
+                    d[f'ipv{addr.version}'] = str(addr.ip)
+                    d[f'ipv{addr.version}_network'] = str(addr.network)
+                    d['is_loopback'] = addr.is_loopback
+                    d['is_private'] = addr.is_private and not addr.is_loopback
+                    d['is_public'] = addr.is_global
 
+        # filter out stuff without ipv4 addresses
+        L = [_ for _ in L if 'ipv4' in _]
         return {'interfaces': L}
 
     def get_cpu_count():
@@ -200,6 +202,8 @@ elif sys.platform == 'linux':
                 d['is_private'] = addr.is_private and not addr.is_loopback
                 d['is_public'] = addr.is_global
 
+        # filter out stuff without ipv4 addresses
+        L = [_ for _ in L if 'ipv4' in _]
         return {'interfaces': L}
 
     def get_cpu_count():
