@@ -44,6 +44,7 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
     def my_ip(key='ipv4', filter='is_private'):
         network = None
         if filter == 'is_private':
+            filter = context['me']['vars'].get('private_filter', filter)
             network = context['me']['vars'].get('private_network')
 
         L = [
