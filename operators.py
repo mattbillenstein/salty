@@ -67,6 +67,7 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
         # first private ip
         network = None
         if filter == 'is_private':
+            filter = context['me']['vars'].get('private_filter', filter)
             network = context['me']['vars'].get('private_network')
 
         ips = []
