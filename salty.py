@@ -4,6 +4,7 @@ import gevent.monkey
 gevent.monkey.patch_all()
 
 import fnmatch
+import json
 import os
 import os.path
 import platform
@@ -17,7 +18,6 @@ import traceback
 import uuid
 from collections import defaultdict
 from queue import Queue
-from pprint import pprint
 
 import gevent
 import gevent.server
@@ -49,6 +49,19 @@ def print_error(*args, **kwargs):
     if sys.stdout.isatty():
         args = [f'\033[1;31m{_}\033[0m' for _ in args]
     print(*args, **kwargs)
+
+def pprint(obj):
+    print(json.dumps(obj, indent=2))
+
+def get_facts():
+    uname = platform.uname()
+    return {
+        'networking': get_networking(),
+        'cpu_count': get_cpu_count(),
+        'mem_gb': get_mem_gb(),
+        'kernel': uname.system,
+        'machine': uname.machine,
+    }
 
 class Reactor(object):
 
@@ -94,9 +107,15 @@ class Reactor(object):
                 sock.sendall(msg)
 
     def _pinger(self, q):
+        last_facts = time.time()
         while 1:
             now = time.time()
-            self.send_msg(q, {'type': 'ping'})
+            msg = {'type': 'ping'}
+            if now - last_facts > 60.0:
+                # re-send facts every ~1m
+                msg['id'] = self.id
+                msg['facts'] = get_facts()
+            self.send_msg(q, msg)
             time.sleep(5)
 
             # if no pong back, break
@@ -125,7 +144,7 @@ class Reactor(object):
         p = None
         if is_client:
             p = gevent.spawn(self._pinger, q)
-            self.send_msg(q, {'type': 'identify', 'id': self.id, 'facts': self.get_facts()})
+            self.send_msg(q, {'type': 'identify', 'id': self.id, 'facts': get_facts()})
 
         try:
             fh = sock.makefile(mode='b')
@@ -174,7 +193,15 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
         super().__init__(*args, **kwargs)
 
     def handle_ping(self, msg, q):
+        if facts := msg.get('facts'):
+            self.facts[msg['id']] = facts
         self.send_msg(q, {'type': 'pong'})
+
+    def handle_clients(self, msg, q):
+        msg['clients'] = clients = {}
+        for id in self.clients:
+            clients[id] = {'facts': self.facts[id]}
+        self.send_msg(q, msg)
 
     def handle_get_file(self, msg, q):
         path = os.path.join(self.fileroot, 'files', msg['path'])
@@ -365,19 +392,6 @@ class SaltyClient(Reactor):
         sock.connect(self.addr)
         return sock
 
-    def get_facts(self):
-        facts = {}
-
-        facts['networking'] = get_networking()
-        facts['cpu_count'] = get_cpu_count()
-        facts['mem_gb'] = get_mem_gb()
-
-        uname = platform.uname()
-        facts['kernel'] = uname.system
-        facts['machine'] = uname.machine
-
-        return facts
-
     def handle_pong(self, msg, q):
         self._last_pong = time.time()
 
@@ -447,7 +461,7 @@ class SaltyClient(Reactor):
         while 1:
             try:
                 msg = self.recv_msg(sock, timeout=5)
-                if msg['type'] == 'apply_result':
+                if msg['type'] != 'pong':
                     return msg
                 log(f'Working {int(time.time()-start):} seconds ...', end='\r')
             except ConnectionTimeout as e:
@@ -456,15 +470,25 @@ class SaltyClient(Reactor):
 def main(mode, *args):
     start = time.time()
 
-    if mode == 'help' or mode not in ('genkey', 'server', 'client', 'cli', 'bootstrap'):
-        print('Usage: ./salty.py (help | genkey | server | client | cli | bootstrap) [args]')
-        sys.exit(0)
+    if mode == 'help' or mode not in ('facts', 'genkey', 'server', 'client', 'cli', 'bootstrap'):
+        print('Usage: ./salty.py (help | facts | genkey | server | client | cli | bootstrap) [args]')
+        return 0
 
-    if mode != 'genkey':
-        hostport = args[0]
-        args = args[1:]
-        hostport = hostport.split(':')
-        hostport = (hostport[0], int(hostport[1]))
+    if mode == 'facts':
+        pprint(get_facts())
+        return 0
+
+    if mode == 'genkey':
+        # FIXME, use openssl python module...
+        os.system('openssl req -new -newkey rsa:4096 -days 3650 -nodes -x509 -subj "/C=US/ST=CA/L=SF/O=A/CN=B" -keyout key.pem -out cert.pem')
+        with open('crypto.pass', 'w') as f:
+            f.write(hash_data(os.urandom(1024)))
+        return 0
+
+    hostport = args[0]
+    args = args[1:]
+    hostport = hostport.split(':')
+    hostport = (hostport[0], int(hostport[1]))
 
     verbose = 0
     opts = {}
@@ -488,11 +512,6 @@ def main(mode, *args):
             log('Exit.')
     elif mode == 'client':
         SaltyClient(hostport, **opts).serve_forever()
-    elif mode == 'genkey':
-        # FIXME, use openssl python module...
-        os.system('openssl req -new -newkey rsa:4096 -days 3650 -nodes -x509 -subj "/C=US/ST=CA/L=SF/O=A/CN=B" -keyout key.pem -out cert.pem')
-        with open('crypto.pass', 'w') as f:
-            f.write(hash_data(os.urandom(1024)))
     elif mode in ('cli', 'bootstrap'):
         if mode == 'bootstrap':
             server_opts = {k: v for k, v in opts.items() if k in ('fileroot', 'keyroot')}
@@ -531,47 +550,50 @@ def main(mode, *args):
         result = SaltyClient(hostport, **opts).run(msg)
 
         if result.get('error'):
-            log_error(f'Exception in apply:\n{result["error"]}')
-            sys.exit(1)
+            log_error(f'Errors in result:\n{result["error"]}')
+            return 1
 
-        for host, roles in result['results'].items():
-            changed = 0
-            errors = 0
-            host_elapsed = 0.0
-            for role, cmds in roles.items():
-                host_elapsed += cmds['elapsed']
-                if sum(1 for _ in cmds['results'] if _['changed']):
-                    changed += 1
-                if sum(1 for _ in cmds['results'] if _['rc'] > 0):
-                    errors += 1
+        if msg['type'] == 'apply':
+            for host, roles in result['results'].items():
+                changed = 0
+                errors = 0
+                host_elapsed = 0.0
+                for role, cmds in roles.items():
+                    host_elapsed += cmds['elapsed']
+                    if sum(1 for _ in cmds['results'] if _['changed']):
+                        changed += 1
+                    if sum(1 for _ in cmds['results'] if _['rc'] > 0):
+                        errors += 1
 
-            total_errors += errors
+                total_errors += errors
+
+                print()
+                print(f'host:{host} elapsed:{host_elapsed:.3f} errors:{errors} changed:{changed}')
+                for role, cmds in roles.items():
+                    changed = sum(1 for _ in cmds['results'] if _['changed'])
+                    errors = sum(1 for _ in cmds['results'] if _['rc'] > 0)
+                    if changed or errors or verbose > 0:
+                        print(f'  role:{role:11} elapsed:{cmds["elapsed"]:.3f} errors:{errors} changed:{changed}')
+                        if cmds.get('output') and verbose > 1:
+                            print(f'    Output:\n{cmds["output"]}')
+
+                        if changed or errors or verbose > 1:
+                            for result in cmds['results']:
+                                if result['rc'] or result['changed'] or verbose > 1:
+                                    output = result.pop('output', '').rstrip()
+                                    s = f'    {result}'
+                                    print_error(s) if result['rc'] else print(s)
+                                    if output and (result['rc'] or verbose > 1):
+                                        print_error(output) if result['rc'] else print(output)
 
             print()
-            print(f'host:{host} elapsed:{host_elapsed:.3f} errors:{errors} changed:{changed}')
-            for role, cmds in roles.items():
-                changed = sum(1 for _ in cmds['results'] if _['changed'])
-                errors = sum(1 for _ in cmds['results'] if _['rc'] > 0)
-                if changed or errors or verbose > 0:
-                    print(f'  role:{role:11} elapsed:{cmds["elapsed"]:.3f} errors:{errors} changed:{changed}')
-                    if cmds.get('output') and verbose > 1:
-                        print(f'    Output:\n{cmds["output"]}')
-
-                    if changed or errors or verbose > 1:
-                        for result in cmds['results']:
-                            if result['rc'] or result['changed'] or verbose > 1:
-                                output = result.pop('output', '').rstrip()
-                                s = f'    {result}'
-                                print_error(s) if result['rc'] else print(s)
-                                if output and (result['rc'] or verbose > 1):
-                                    print_error(output) if result['rc'] else print(output)
+            print(f'elapsed:{elapsed(start):.3f}')
+        else:
+            pprint(result)
 
         if mode == 'bootstrap':
             client_serve.kill()
             server.stop()
-
-        print()
-        print(f'elapsed:{elapsed(start):.3f}')
 
         if total_errors:
             return 1
