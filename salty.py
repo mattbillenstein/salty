@@ -63,6 +63,28 @@ def get_facts():
         'machine': uname.machine,
     }
 
+def get_meta(fileroot, crypto_pass=None):
+    meta = {}
+    for fname in ('hosts', 'envs', 'clusters'):
+        with open(os.path.join(fileroot, 'meta', f'{fname}.py')) as f:
+            meta[fname] = {}
+            exec(f.read(), meta[fname])
+            for k in list(meta[fname]):
+                if k.startswith('_'):
+                    meta[fname].pop(k)
+
+    if crypto_pass:
+        crypto.decrypt_dict(meta, crypto_pass)
+
+    return meta
+
+def get_crypto_pass(keyroot):
+    fname = os.path.join(keyroot, 'crypto.pass')
+    if os.path.exists(fname):
+        with open(fname) as f:
+            return f.read().strip()
+    return None
+
 class Reactor(object):
 
     def do_rpc(self, sock, msg):
@@ -133,6 +155,8 @@ class Reactor(object):
         if method:
             gevent.spawn(method, msg, q)
         else:
+            msg['error'] = f"Method {msg['type']} not found"
+            self.send_msg(q, msg)
             log_error(f'Unhandled message: {msg}')
 
     def handle(self, sock, addr, is_client=False):
@@ -184,11 +208,7 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
         kwargs['keyfile'] = os.path.join(keyroot, 'key.pem')
         kwargs['certfile'] = os.path.join(keyroot, 'cert.pem')
 
-        self.crypto_pass = None
-        fname = os.path.join(keyroot, 'crypto.pass')
-        if os.path.exists(fname):
-            with open(fname) as f:
-                self.crypto_pass = f.read().strip()
+        self.crypto_pass = get_crypto_pass(keyroot)
 
         super().__init__(*args, **kwargs)
 
@@ -197,10 +217,10 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
             self.facts[msg['id']] = facts
         self.send_msg(q, {'type': 'pong'})
 
-    def handle_clients(self, msg, q):
-        msg['clients'] = clients = {}
-        for id in self.clients:
-            clients[id] = {'facts': self.facts[id]}
+    def handle_hosts(self, msg, q):
+        meta = get_meta(self.fileroot, self.crypto_pass)
+        hosts = self.get_hosts(meta)
+        msg['hosts'] = {k: v for k, v in hosts.items() if v['facts']}
         self.send_msg(q, msg)
 
     def handle_get_file(self, msg, q):
@@ -260,6 +280,24 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
 
         self.send_msg(q, msg)
 
+    def get_hosts(self, meta):
+        hosts = {}
+        for cluster, servers in meta['hosts'].items():
+            for id, v in servers.items():
+                v['cluster'] = cluster
+                v['facts'] = self.facts.get(id)
+
+                # vars precedence - env, cluster, host - save off host vars
+                # first and apply last...
+                vars = v.get('vars', {})
+                v['vars'] = {}
+                v['vars'].update(meta['envs'][v['env']])
+                v['vars'].update(meta['clusters'][cluster])
+                v['vars'].update(vars)
+                hosts[id] = v
+
+        return hosts
+
     def handle_apply(self, msg, q):
         start = time.time()
         results = defaultdict(dict)
@@ -272,42 +310,21 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
                 target_cluster = target.split(':')[1]
                 target = None
 
-            # apply roles to target servers
-            meta = {}
-            for fname in ('hosts', 'envs', 'clusters'):
-                with open(os.path.join(self.fileroot, 'meta', f'{fname}.py')) as f:
-                    meta[fname] = {}
-                    exec(f.read(), meta[fname])
-                    for k in list(meta[fname]):
-                        if k.startswith('_'):
-                            meta[fname].pop(k)
+            meta = get_meta(self.fileroot, self.crypto_pass)
+
+            hosts = self.get_hosts(meta)
+
+            for id in list(hosts):
+                v = hosts[id]
+                # skip disconnected / non-existing hosts, but return error
+                # if target is cluster
+                if v['facts'] is None:
+                    if target_cluster and target_cluster == v['cluster']:
+                        if not v.get('ignore_missing', False):
+                            results[id][''] = {'results': [{'rc': 1, 'cmd': '...host missing...', 'elapsed': 0.0, 'changed': False}], 'elapsed': 0.0}
+                    del hosts[id]
 
             # unwind cluster -> id in hosts and apply facts/envs/clusters
-            hosts = {}
-            for cluster, servers in meta['hosts'].items():
-                for id, v in servers.items():
-                    # skip disconnected / non-existing hosts, but return error
-                    # if target is cluster
-                    if id not in self.facts:
-                        if target_cluster and target_cluster == cluster:
-                            if not v.get('ignore_missing', False):
-                                results[id][''] = {'results': [{'rc': 1, 'cmd': '...host missing...', 'elapsed': 0.0, 'changed': False}], 'elapsed': 0.0}
-
-                        continue
-
-                    v['cluster'] = cluster
-                    v['facts'] = self.facts[id]
-                    # vars precedence - env, cluster, host - save off host vars
-                    # first and apply last...
-                    vars = v.get('vars', {})
-                    v['vars'] = {}
-                    v['vars'].update(meta['envs'][v['env']])
-                    v['vars'].update(meta['clusters'][cluster])
-                    v['vars'].update(vars)
-                    hosts[id] = v
-
-            crypto.decrypt_dict(meta, self.crypto_pass)
-
             # roles to apply, if empty, apply all host roles
             roles = msg.get('roles', [])
             # roles to skip unless given explictely
@@ -470,15 +487,43 @@ class SaltyClient(Reactor):
             except ConnectionTimeout as e:
                 self.send_msg(sock, {'type': 'ping'})
 
-def main(mode, *args):
+def main(*args):
     start = time.time()
 
-    if mode == 'help' or mode not in ('facts', 'genkey', 'server', 'client', 'cli', 'bootstrap'):
-        print('Usage: ./salty.py (help | facts | genkey | server | client | cli | bootstrap) [args]')
+    mode = 'help'
+    if args:
+        mode, args = args[0], args[1:]
+
+    modes = ('facts', 'meta', 'genkey', 'server', 'client', 'cli', 'bootstrap')
+    if mode == 'help' or mode not in modes:
+        print(f"Usage: ./salty.py ({' | '.join(modes)}) [args]")
         return 0
+
+    # fixme - argparse
+    verbose = 0
+
+    # consume salty args, they begin with a -
+    opts = {}
+    for arg in args:
+        if arg.startswith('-v'):
+            verbose = arg.count('v')
+        elif arg.startswith('--'):
+            k, v = arg[2:].split('=', 1)
+            opts[k] = v
+
+    # filter run args
+    args = [_ for _ in args if not _.startswith('-')]
 
     if mode == 'facts':
         pprint(get_facts())
+        return 0
+
+    if mode == 'meta':
+        assert opts['fileroot'], 'Need --fileroot=<path>'
+        crypto_pass = None
+        if keyroot := opts.get('keyroot'):
+            crypto_pass = get_crypto_pass(keyroot)
+        pprint(get_meta(opts['fileroot'], crypto_pass))
         return 0
 
     if mode == 'genkey':
@@ -492,21 +537,6 @@ def main(mode, *args):
     args = args[1:]
     hostport = hostport.split(':')
     hostport = (hostport[0], int(hostport[1]))
-
-    verbose = 0
-    opts = {}
-
-    # consume salty args, they begin with a -
-    # fixme - argparse
-    for arg in args:
-        if arg.startswith('-v'):
-            verbose = arg.count('v')
-        elif arg.startswith('--'):
-            k, v = arg[2:].split('=', 1)
-            opts[k] = v
-
-    # filter run args
-    args = [_ for _ in args if not _.startswith('-')]
 
     if mode == 'server':
         try:
