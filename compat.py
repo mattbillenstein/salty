@@ -178,7 +178,7 @@ elif sys.platform == 'linux':
             return f'useradd --create-home --user-group{system} --shell /bin/bash {username}'
 
     def get_networking():
-        device = re.compile('^[0-9]+: ([a-zA-Z0-9]+): <')
+        device = re.compile('^[0-9]+: ([a-zA-Z0-9@]+): <')
         link = re.compile('^\s+link/[^ ]+ ([0-9a-f:]{17}) ')
         inet = re.compile('^\s+inet[6]{0,1} ([a-f0-9\.:]+/[0-9]+) ')
 
