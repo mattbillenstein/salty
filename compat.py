@@ -198,8 +198,9 @@ elif sys.platform == 'linux':
                 addr = ipaddress.ip_interface(mobj.group(1))
                 d[f'ipv{addr.version}'] = str(addr.ip)
                 d[f'ipv{addr.version}_network'] = str(addr.network)
+                d['is_bridge'] = os.path.exists(f'/sys/class/net/{d["device"]}/bridge')
                 d['is_loopback'] = addr.is_loopback
-                d['is_private'] = addr.is_private and not addr.is_loopback
+                d['is_private'] = addr.is_private and not addr.is_loopback and not d['is_bridge']
                 d['is_public'] = addr.is_global
 
         # filter out stuff without ipv4 addresses
