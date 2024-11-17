@@ -137,6 +137,8 @@ if sys.platform == 'darwin':
         for line in lines:
             if mobj := device.match(line):
                 d = {'device': mobj.group(1)}
+                for k in ('is_bridge', 'is_loopback', 'is_private', 'is_public'):
+                    d[k] = False
                 L.append(d)
             elif mobj := mac.match(line):
                 d['mac'] = mobj.group(1)
@@ -150,9 +152,10 @@ if sys.platform == 'darwin':
                 if f'ipv{addr.version}' not in d:  # take first
                     d[f'ipv{addr.version}'] = str(addr.ip)
                     d[f'ipv{addr.version}_network'] = str(addr.network)
-                    d['is_loopback'] = addr.is_loopback
-                    d['is_private'] = addr.is_private and not addr.is_loopback
-                    d['is_public'] = addr.is_global
+                    if addr.version == 4:
+                        d['is_loopback'] = addr.is_loopback
+                        d['is_private'] = addr.is_private and not addr.is_loopback
+                        d['is_public'] = addr.is_global
 
         # filter out stuff without ipv4 addresses
         L = [_ for _ in L if 'ipv4' in _]
