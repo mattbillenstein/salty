@@ -191,6 +191,8 @@ elif sys.platform == 'linux':
         for line in lines:
             if mobj := device.match(line):
                 d = {'device': mobj.group(1)}
+                for k in ('is_bridge', 'is_loopback', 'is_private', 'is_public'):
+                    d[k] = False
                 L.append(d)
             elif mobj := link.match(line):
                 d['mac'] = mobj.group(1)
@@ -198,10 +200,12 @@ elif sys.platform == 'linux':
                 addr = ipaddress.ip_interface(mobj.group(1))
                 d[f'ipv{addr.version}'] = str(addr.ip)
                 d[f'ipv{addr.version}_network'] = str(addr.network)
-                d['is_bridge'] = os.path.exists(f'/sys/class/net/{d["device"]}/bridge')
-                d['is_loopback'] = addr.is_loopback
-                d['is_private'] = addr.is_private and not addr.is_loopback and not d['is_bridge']
-                d['is_public'] = addr.is_global
+                if addr.version == 4:
+                    # FIXME, multiple ipv4 addresses on a single interface?
+                    d['is_bridge'] = os.path.exists(f'/sys/class/net/{d["device"]}/bridge')
+                    d['is_loopback'] = addr.is_loopback
+                    d['is_private'] = addr.is_private and not addr.is_loopback and not d['is_bridge']
+                    d['is_public'] = addr.is_global
 
         # filter out stuff without ipv4 addresses
         L = [_ for _ in L if 'ipv4' in _]
