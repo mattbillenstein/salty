@@ -283,18 +283,28 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
     def get_hosts(self, meta):
         hosts = {}
         for cluster, servers in meta['hosts'].items():
-            for id, v in servers.items():
-                v['cluster'] = cluster
-                v['facts'] = self.facts.get(id)
+            for id, data in servers.items():
+                ids = [id]
 
-                # vars precedence - env, cluster, host - save off host vars
-                # first and apply last...
-                vars = v.get('vars', {})
-                v['vars'] = {}
-                v['vars'].update(meta['envs'][v['env']])
-                v['vars'].update(meta['clusters'][cluster])
-                v['vars'].update(vars)
-                hosts[id] = v
+                # if not a direct match, probably a fnmatch wildcard, expand
+                # wildcard against hosts currently in facts...
+                if any(_ in id for _ in '*![]?'):
+                    ids = fnmatch.filter(self.facts, id)
+                    log(f'Expanded {id} to {ids}')
+
+                for id in ids:
+                    v = dict(data)
+                    v['cluster'] = cluster
+                    v['facts'] = self.facts.get(id)
+
+                    # vars precedence - env, cluster, host - save off host vars
+                    # first and apply last...
+                    vars = v.get('vars', {})
+                    v['vars'] = {}
+                    v['vars'].update(meta['envs'][v['env']])
+                    v['vars'].update(meta['clusters'][cluster])
+                    v['vars'].update(vars)
+                    hosts[id] = v
 
         return hosts
 
