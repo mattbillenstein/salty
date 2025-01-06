@@ -65,13 +65,19 @@ def get_facts():
 
 def get_meta(fileroot, crypto_pass=None):
     meta = {}
-    for fname in ('hosts', 'envs', 'clusters'):
-        with open(os.path.join(fileroot, 'meta', f'{fname}.py')) as f:
-            meta[fname] = {}
-            exec(f.read(), meta[fname])
-            for k in list(meta[fname]):
-                if k.startswith('_'):
-                    meta[fname].pop(k)
+    metapy = os.path.join(fileroot, 'meta.py')
+    if os.path.isfile(metapy):
+        with open(metapy) as f:
+            exec(f.read(), meta)
+        meta = {k: v for k, v in meta.items() if k[0] != '_'}
+    else:
+        for fname in ('hosts', 'envs', 'clusters'):
+            with open(os.path.join(fileroot, 'meta', f'{fname}.py')) as f:
+                meta[fname] = {}
+                exec(f.read(), meta[fname])
+                for k in list(meta[fname]):
+                    if k.startswith('_'):
+                        meta[fname].pop(k)
 
     if crypto_pass:
         crypto.decrypt_dict(meta, crypto_pass)
