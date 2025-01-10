@@ -37,6 +37,8 @@ if sys.platform == 'darwin':
 
                     if k == 'name':
                         r = {}
+                        if cls is grp:
+                            r['users'] = []
                         recs.append(r)
 
                     if k in ('uid', 'gid'):
@@ -94,6 +96,10 @@ if sys.platform == 'darwin':
                     return r
             raise KeyError(f'Missing gid {gid}')
 
+        @classmethod
+        def getgrall(cls):
+            return cls.get_recs()
+
     def useradd_command(username, system=False):
         # find the highest uid+1, and gid+1
         uid = max(_.pw_uid for _ in pwd.get_recs()) + 1
@@ -123,6 +129,22 @@ if sys.platform == 'darwin':
         pwd._cache = None
         grp._cache = None
         return '; '.join(cmds)
+
+    def usergroups_command(username, groups):
+        cmds = []
+        for group in grp.getgrall():
+            # skip user group
+            if group.gr_name == username:
+                continue
+
+            if group.gr_name in groups and username not in group.gr_mem:
+                # add to group
+                cmds.append(f'dseditgroup -o edit -a {username} -t user {group}')
+            elif group.gr_nam not in groups and username in group.gr_mem:
+                # remove from group
+                cmds.append(f'dseditgroup -o edit -d {username} -t user {group}')
+
+        return ';'.join(cmds)
 
     def get_networking():
         device = re.compile('^([a-zA-Z0-9]+): ')
@@ -179,6 +201,20 @@ elif sys.platform == 'linux':
         def useradd_command(username, system=False):
             system = ' --system' if system else ''
             return f'useradd --create-home --user-group{system} --shell /bin/bash {username}'
+
+    def usergroups_command(username, groups):
+        for group in grp.getgrall():
+            # skip user group
+            if group.gr_name == username:
+                continue
+
+            if group.gr_name in groups and username not in group.gr_mem or \
+               group.gr_name not in groups and username in group.gr_mem:
+                # This command sets all user groups in one command, so just
+                # return it on any change...
+                return f'usermod -G "{",".join(groups)}" {username}'
+
+        return ''
 
     def get_networking():
         device = re.compile('^[0-9]+: ([a-zA-Z0-9@]+): <')

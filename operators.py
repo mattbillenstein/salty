@@ -11,7 +11,7 @@ from collections import defaultdict
 import mako.exceptions
 import mako.template
 
-from compat import grp, pwd, useradd_command
+from compat import grp, pwd, useradd_command, usergroups_command
 
 DEFAULT_USER = pwd.getpwuid(os.getuid()).pw_name
 
@@ -99,7 +99,9 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
             if stat.S_ISDIR(st.st_mode):
                 mode = 0o755
 
-        if st.st_mode & 0o777 != mode:
+        # We care about the group sticky bit and the standard permission
+        # bits...
+        if st.st_mode & (stat.S_ISGID | 0o777) != mode:
             os.chmod(path, mode)
             changed = True
 
@@ -322,6 +324,21 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
         result['elapsed'] = elapsed(start)
         return result
 
+    def usergroups(username, groups):
+        start = time.time()
+        result = {'cmd': f'usergroups({username}, {groups})', 'rc': 0, 'changed': False, 'created': False}
+        results.append(result)
+
+        cmd = usergroups_command(username, groups)
+        if cmd:
+            rc = shell(cmd)
+            result['created'] = True
+            result['changed'] = True
+            result['output'] = rc['output']
+
+        result['elapsed'] = elapsed(start)
+        return result
+
     def syncdir(src, dst, user=DEFAULT_USER, mode=0o755):
         # add user and matching group if they do not exist
         start = time.time()
@@ -374,6 +391,7 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
         'shell': shell,
         'symlink': symlink,
         'useradd': useradd,
+        'usergroups': usergroups,
         'syncdir': syncdir,
     }
     g.update(context)
