@@ -12,6 +12,7 @@ import re
 import socket
 import ssl
 import struct
+import subprocess
 import sys
 import time
 import traceback
@@ -286,6 +287,25 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
 
         self.send_msg(q, msg)
 
+    def handle_server_shell(self, msg, q):
+        msg['type'] = 'future'
+
+        try:
+            start = time.time()
+            p = subprocess.run(msg['cmds'], shell=True, capture_output=True, **msg['kwds'])
+            msg['data'] = {
+                'rc': p.returncode,
+                'output': p.stdout.decode('utf8') + '\n' + p.stderr.decode('utf8'),
+                'elapsed': elapsed(start),
+            }
+        except Exception:
+            log_error('Exception handling msg in handle_server_shell:', msg)
+            tb = traceback.format_exc().strip()
+            print(tb)
+            msg['error'] = tb
+
+        self.send_msg(q, msg)
+
     def get_hosts(self, meta):
         hosts = {}
         for cluster, servers in meta['hosts'].items():
@@ -435,13 +455,23 @@ class SaltyClient(Reactor):
         start = time.time()
 
         def get_file(path, **opts):
-            return self.get_file(q, path, **opts)
+            msg = self.get_file(q, path, **opts)
+            assert not msg.get('error'), msg['error']
+            return msg
 
         def syncdir_get_file(path):
-            return self.syncdir_get_file(q, path)
+            msg = self.syncdir_get_file(q, path)
+            assert not msg.get('error'), msg['error']
+            return msg
 
         def syncdir_scandir(path):
             msg = self.syncdir_scandir(q, path)
+            assert not msg.get('error'), msg['error']
+            return msg['data']
+
+        def server_shell(cmds, **kwds):
+            msg = self.server_shell(q, cmds, **kwds)
+            assert not msg.get('error'), msg['error']
             return msg['data']
 
         content = msg.pop('content')
@@ -453,6 +483,7 @@ class SaltyClient(Reactor):
             get_file,
             syncdir_get_file,
             syncdir_scandir,
+            server_shell,
         )
 
         msg['type'] = 'future'
@@ -473,6 +504,10 @@ class SaltyClient(Reactor):
 
     def syncdir_scandir(self, sock, path):
         msg = {'type': 'syncdir_scandir', 'path': path}
+        return self.do_rpc(sock, msg)
+
+    def server_shell(self, sock, cmds, **kwds):
+        msg = {'type': 'server_shell', 'cmds': cmds, 'kwds': kwds}
         return self.do_rpc(sock, msg)
 
     def serve_forever(self):

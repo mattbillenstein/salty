@@ -34,7 +34,7 @@ def hash_file(path):
 def elapsed(start):
     return round(time.time() - start, 6)
 
-def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scandir):
+def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scandir, server_shell):
     # these are the operators available in roles, they're nested functions here
     # so we can keep their signatures clean and collect the result of each
     # function...
@@ -393,6 +393,7 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
         'useradd': useradd,
         'usergroups': usergroups,
         'syncdir': syncdir,
+        'server_shell': server_shell,
     }
     g.update(context)
     content = '\n'.join(IMPORTS) + '\n' + content
