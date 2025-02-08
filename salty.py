@@ -13,7 +13,7 @@ import gevent
 from lib import crypto, operators
 from lib.compat import get_facts
 from lib.net import ConnectionTimeout, CONNECTION_TIMEOUT, Reactor
-from lib.util import elapsed, get_crypto_pass, hash_data, log, log_error
+from lib.util import elapsed, get_crypto_pass, hash_data, log, log_error, pprint
 from client import SaltyClient
 from server import SaltyServer, get_meta
 
