@@ -1,4 +1,4 @@
-In this directory, run ../scripts/genkeys.sh, and then ../scripts/venv.sh
+In this directory, run ../scripts/venv.sh
 
 In one window each, run:
 

@@ -1,0 +1,9 @@
+#!/bin/bash
+
+ID="server1"
+if [ "$1" != "" ]; then
+  ID="$1"
+fi
+
+source ../.venv/bin/activate
+../salty.py bootstrap 127.0.0.1:11112 --id=$ID --path=tmp/$ID
