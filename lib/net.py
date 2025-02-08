@@ -16,6 +16,9 @@ CONNECTION_TIMEOUT = ConnectionTimeout('Connection timeout')
 SOCKET_TIMEOUT = 30
 
 def recvall(sock, size):
+    # reading from a socket, there is no guarantee how much data you might get;
+    # it's a stream although if you get no data, the socket is disconnected.
+    # Loop until we get size bytes...
     data = b''
     while 1:
         newdata = sock.read(size - len(data))
@@ -102,14 +105,13 @@ class Reactor:
             self.send_msg(q, {'type': 'identify', 'id': self.id, 'facts': get_facts()})
 
         try:
-            fh = sock.makefile(mode='b')
             while 1:
                 try:
                     # if writer dead, break and eventually close the socket...
                     if g.dead or (p and p.dead):
                         break
 
-                    msg = self.recv_msg(fh)
+                    msg = self.recv_msg(sock)
                     if msg['type'] == 'identify':
                         client_id = msg['id']
                         log(f'id:{client_id} facts:{msg["facts"]}')
