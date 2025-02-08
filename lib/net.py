@@ -24,7 +24,6 @@ def recvall(sock, size):
         data += newdata
         if len(data) == size:
             break
-        time.sleep(0.01)
     return data
 
 class Reactor:
