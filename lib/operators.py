@@ -1,4 +1,3 @@
-import hashlib
 import os
 import os.path
 import shutil
@@ -11,7 +10,8 @@ from collections import defaultdict
 import mako.exceptions
 import mako.template
 
-from compat import grp, pwd, useradd_command, usergroups_command
+from .compat import grp, pwd, useradd_command, usergroups_command
+from .util import hash_data, hash_file, elapsed
 
 DEFAULT_USER = pwd.getpwuid(os.getuid()).pw_name
 
@@ -21,18 +21,6 @@ IMPORTS = [
     'import os.path',
     'import json',
 ]
-
-def hash_data(data):
-    return hashlib.sha1(data).hexdigest()
-
-def hash_file(path):
-    if os.path.isfile(path):
-        with open(path, 'rb') as f:
-            return hash_data(f.read())
-    return None
-
-def elapsed(start):
-    return round(time.time() - start, 6)
 
 def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scandir, server_shell):
     # these are the operators available in roles, they're nested functions here

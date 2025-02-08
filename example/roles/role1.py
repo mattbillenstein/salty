@@ -1,7 +1,9 @@
 # files are rooted in the 'files' dir
 x = copy('role1/afile.txt', '/etc/afile.txt')
 if x['changed']:
-  render('role1/atemplate.txt', '/etc/atemplate.txt', extra='some extra data')
+    copy('role1/afile.txt', '/etc/afile1.txt')
+
+render('role1/atemplate.txt', '/etc/atemplate.txt', extra='some extra data')
 
 # it's just python, so go wild
 for i in range(3):

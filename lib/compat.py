@@ -4,9 +4,20 @@ import ipaddress
 import json
 import os
 import os.path
+import platform
 import re
 import subprocess
 import sys
+
+def get_facts():
+    uname = platform.uname()
+    return {
+        'networking': get_networking(),
+        'cpu_count': get_cpu_count(),
+        'mem_gb': get_mem_gb(),
+        'kernel': uname.system,
+        'machine': uname.machine,
+    }
 
 if sys.platform == 'darwin':
     import time
