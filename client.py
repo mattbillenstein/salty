@@ -4,10 +4,12 @@ import socket
 import ssl
 import time
 import traceback
+from queue import Queue
 
 from lib import operators
-from lib.net import Reactor, ConnectionTimeout
-from lib.util import elapsed, log, log_error
+from lib.compat import get_facts
+from lib.net import Reactor
+from lib.util import elapsed, log, log_error, spawn_thread
 
 class SaltyClient(Reactor):
     def __init__(self, addr, keyroot=os.getcwd(), id=None, path=''):
@@ -20,14 +22,7 @@ class SaltyClient(Reactor):
 
     def connect(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.check_hostname = False
-        ctx.load_cert_chain(
-            certfile=os.path.join(self.keyroot, 'cert.pem'),
-            keyfile=os.path.join(self.keyroot, 'key.pem'),
-        )
-        ctx.load_verify_locations(os.path.join(self.keyroot, 'cert.pem'))
-        sock = ctx.wrap_socket(sock)
+        sock = self.wrap_socket(sock)
         sock.connect(self.addr)
         return sock
 
@@ -93,12 +88,38 @@ class SaltyClient(Reactor):
         msg = {'type': 'server_shell', 'cmds': cmds, 'kwds': kwds}
         return self.do_rpc(sock, msg)
 
+    def handle(self, sock, addr):
+        log(f'Connection established {addr[0]}:{addr[1]}')
+        client_id = None
+        q = Queue()
+        g = spawn_thread(self._writer, (sock, q))
+        p = spawn_thread(self._pinger, (q,))
+        self.send_msg(q, {'type': 'identify', 'id': self.id, 'facts': get_facts()})
+
+        try:
+            while 1:
+                try:
+                    # if writer dead, break and eventually close the socket...
+                    if not g.is_alive() or not p.is_alive():
+                        break
+
+                    msg = self.recv_msg(sock)
+                    if msg is None:
+                        log(f'Lost connection {addr[0]}:{addr[1]}')
+                        break
+                    self.handle_msg(msg, q)
+                except OSError:
+                    log(f'Connection lost {addr[0]}:{addr[1]}')
+                    break
+        finally:
+            sock.close()
+
     def serve_forever(self):
         while 1:
             sock = None
             try:
                 sock = self.connect()
-                self.handle(sock, self.addr, is_client=True)
+                self.handle(sock, self.addr)
             except KeyboardInterrupt:
                 break
             except Exception:
@@ -116,9 +137,9 @@ class SaltyClient(Reactor):
         start = time.time()
         while 1:
             try:
-                msg = self.recv_msg(sock, timeout=5)
+                msg = self.recv_msg(sock) #, timeout=5)
                 if msg['type'] != 'pong':
                     return msg
                 log(f'Working {int(time.time()-start):} seconds ...', end='\r')
-            except ConnectionTimeout as e:
+            except Exception as e:
                 self.send_msg(sock, {'type': 'ping'})

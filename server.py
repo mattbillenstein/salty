@@ -1,17 +1,20 @@
 import fnmatch
+import multiprocessing
 import os
 import os.path
+import selectors
+import socket
 import subprocess
 import time
+import threading
 import traceback
 from collections import defaultdict
-
-import gevent
-import gevent.server
+from queue import Queue
+from selectors import DefaultSelector as Selector
 
 from lib import crypto, operators
 from lib.net import Reactor
-from lib.util import elapsed, get_crypto_pass, hash_data, log, log_error
+from lib.util import elapsed, get_crypto_pass, hash_data, log, log_error, spawn_process, spawn_thread
 
 def get_meta(fileroot, crypto_pass=None):
     meta = {}
@@ -34,20 +37,119 @@ def get_meta(fileroot, crypto_pass=None):
 
     return meta
 
-class SaltyServer(gevent.server.StreamServer, Reactor):
-    def __init__(self, *args, **kwargs):
+def client_proc(conn, addr, keyroot, pipe):
+    log(f'Start client_proc {addr[0]}:{addr[1]}')
+    running = True
+    selector = Selector()
+    reactor = Reactor()
+    reactor.keyroot = keyroot
+    conn = reactor.wrap_socket(conn, server_side=True)
+
+    def from_client(sock, mask):
+        msg = reactor.recv_msg(sock)
+        if not msg:
+            selector.unregister(sock)
+            sock.close()
+            return True
+
+        # todo handle file ops directly
+        reactor.send_msg(pipe, msg)
+
+        return False
+
+    def from_server(sock, mask):
+        msg = reactor.recv_msg(sock)
+        if not msg:
+            selector.unregister(sock)
+            sock.close()
+            return True
+
+        reactor.send_msg(conn, msg)
+
+        return False
+
+    # data from client
+    conn.setblocking(False)
+    selector.register(conn, selectors.EVENT_READ, from_client)
+
+    # data from server process
+    pipe.setblocking(False)
+    selector.register(pipe, selectors.EVENT_READ, from_server)
+
+    while running:
+        for key, mask in selector.select(timeout=1.0):
+            callback = key.data
+            closed = callback(key.fileobj, mask)
+            if closed:
+                running = False
+                break
+
+    log(f'Exit client_proc {addr[0]}:{addr[1]}')
+
+class SaltyServer(Reactor):
+    def __init__(self, addr, **kwargs):
         self.clients = {}
         self.facts = {}
         self.futures = {}
-        self.fileroot = kwargs.pop('fileroot', os.getcwd())
+        self.fileroot = kwargs.get('fileroot', os.getcwd())
+        self.keyroot = kwargs.get('keyroot', os.getcwd())
 
-        keyroot = kwargs.pop('keyroot', os.getcwd())
-        kwargs['keyfile'] = os.path.join(keyroot, 'key.pem')
-        kwargs['certfile'] = os.path.join(keyroot, 'cert.pem')
+        self.crypto_pass = get_crypto_pass(self.keyroot)
 
-        self.crypto_pass = get_crypto_pass(keyroot)
+        self.selector = Selector()
 
-        super().__init__(*args, **kwargs)
+        if isinstance(addr, socket.socket):
+            duh
+        else:
+            self.listen(addr)
+
+    def listen(self, addr):
+        log(f'Listening on {addr[0]}:{addr[1]}')
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(addr)
+        sock.listen(100)
+        sock.setblocking(False)
+        self.selector.register(sock, selectors.EVENT_READ, self.accept)
+
+    def accept(self, sock, mask):
+        conn, addr = sock.accept()
+        log(f'Connection established {addr[0]}:{addr[1]}')
+
+        # create a pipe for interacting with the subprocess
+        pipe, cpipe = socket.socketpair()
+
+        # create subprocess, args here are pickled to the other process
+        spawn_process(client_proc, args=(conn, addr, self.keyroot, cpipe))
+
+        # Accepted connection now handled by the sub-process, close
+        conn.close()
+
+        # listen for events on our end of the pipe
+        pipe.setblocking(False)
+        self.selector.register(pipe, selectors.EVENT_READ, self.handle)
+
+    def handle(self, conn, mask):
+        msg = self.recv_msg(conn)
+        if msg is not None:
+            self.handle_msg(msg, conn)
+        else:
+            self.selector.unregister(conn)
+
+    def serve_forever(self):
+        while 1:
+            for key, mask in self.selector.select(timeout=5.0):
+                callback = key.data
+                callback(key.fileobj, mask)
+
+    def handle_identify(self, msg, q):
+        client_id = msg['id']
+        log(f'id:{client_id} facts:{msg["facts"]}')
+        self.clients[client_id] = q
+        self.facts[client_id] = msg['facts']
+
+        #if not is_client and self.clients.get(client_id) is q:
+        #    self.clients.pop(client_id)
 
     def handle_ping(self, msg, q):
         if facts := msg.get('facts'):
@@ -239,12 +341,12 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
                         rc = sum(_['rc'] for _ in m['results'])
                         log('RPC', x['id'], x['role'], rc, f'{elapsed(t):.6f}')
 
-            greenlets = []
+            threads = []
             for id, host_roles in results.items():
-                g = gevent.spawn(dispatch, host_roles)
-                greenlets.append(g)
+                t = spawn_thread(dispatch, (host_roles,))
+                threads.append(t)
 
-            gevent.wait(greenlets)
+            [_.join() for _ in threads]
 
         except:
             log_error('Exception handling msg in handle_apply:', msg)

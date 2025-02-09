@@ -1,18 +1,12 @@
 #!/usr/bin/env python3
 
-import gevent.monkey
-gevent.monkey.patch_all()
-
 import os
 import re
 import sys
 import time
 
-import gevent
-
 from lib import crypto, operators
 from lib.compat import get_facts
-from lib.net import ConnectionTimeout, CONNECTION_TIMEOUT, Reactor
 from lib.util import elapsed, get_crypto_pass, hash_data, log, log_error, pprint
 from client import SaltyClient
 from server import SaltyServer, get_meta
@@ -51,6 +45,7 @@ def cli(hostport, args, opts, verbose, bootstrap=False):
     start = time.time()
 
     if bootstrap:
+        # use socketpair
         server_opts = {k: v for k, v in opts.items() if k in ('fileroot', 'keyroot')}
         server = SaltyServer(hostport, **server_opts)
         server.start()

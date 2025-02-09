@@ -1,6 +1,8 @@
 import hashlib
 import json
+import multiprocessing
 import sys
+import threading
 import time
 import os.path
 
@@ -47,3 +49,19 @@ def get_crypto_pass(keyroot):
         with open(fname) as f:
             return f.read().strip()
     return None
+
+def spawn_process(func, args=None, kwargs=None):
+    args = args or []
+    kwargs = kwargs or {}
+    p = multiprocessing.Process(target=func, args=args, kwargs=kwargs, daemon=True)
+    p.start()
+    while not p.pid:
+        time.sleep(0.01)
+    return p
+
+def spawn_thread(func, args=None, kwargs=None):
+    args = args or []
+    kwargs = kwargs or {}
+    t = threading.Thread(target=func, args=args, kwargs=kwargs, daemon=True)
+    t.start()
+    return t
