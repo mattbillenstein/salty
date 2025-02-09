@@ -135,11 +135,17 @@ class SaltyClient(Reactor):
         self.send_msg(sock, msg)
 
         start = time.time()
-        while 1:
-            try:
-                msg = self.recv_msg(sock) #, timeout=5)
-                if msg['type'] != 'pong':
-                    return msg
+        running = True
+        def logit():
+            while running:
+                time.sleep(5)
                 log(f'Working {int(time.time()-start):} seconds ...', end='\r')
-            except Exception as e:
-                self.send_msg(sock, {'type': 'ping'})
+        t = spawn_thread(logit)
+
+        while 1:
+            msg = self.recv_msg(sock)
+            if msg['type'] != 'pong':
+                running = False
+                break
+
+        return msg
