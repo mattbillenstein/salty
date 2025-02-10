@@ -2,18 +2,16 @@ import fnmatch
 import multiprocessing
 import os
 import os.path
-import selectors
+import select
 import socket
 import subprocess
 import time
 import threading
 import traceback
 from collections import defaultdict
-from queue import Queue
-from selectors import DefaultSelector as Selector
 
 from lib import crypto, operators
-from lib.net import Reactor
+from lib.net import Reactor, Socket, wrap_socket
 from lib.util import elapsed, get_crypto_pass, hash_data, log, log_error, spawn_process, spawn_thread
 
 def get_meta(fileroot, crypto_pass=None):
@@ -37,57 +35,53 @@ def get_meta(fileroot, crypto_pass=None):
 
     return meta
 
+def syncdir_get_file(msg, sock):
+    msg['type'] = 'future'
+
+    try:
+        with open(msg['path'], 'rb') as f:
+            data = f.read()
+        msg['data'] = data
+    except Exception:
+        log_error('Exception handling msg in handle_syncdir_get_file:', msg)
+        tb = traceback.format_exc().strip()
+        print(tb)
+        msg['error'] = tb
+
+    sock.send_msg(msg)
+
 def client_proc(conn, addr, keyroot, pipe):
     log(f'Start client_proc {addr[0]}:{addr[1]}')
+    conn = wrap_socket(conn, keyroot, server_side=True)
+    conn = Socket(conn)
+    pipe = Socket(pipe)
+
+    def handle(sock, other):
+        nonlocal running
+        print('handle', sock)
+        msg = sock.recv_msg()
+        if not msg:
+            log(f'Sock closed {sock}')
+            running = False
+
+        log('client_proc handle', msg['type'], sock, other)
+        if msg['type'] == 'syncdir_get_file':
+            syncdir_get_file(msg, sock)
+        else:
+            other.send_msg(msg)
+        
+    spawn_thread(handle, (conn, pipe))
+    spawn_thread(handle, (pipe, conn))
+
     running = True
-    selector = Selector()
-    reactor = Reactor()
-    reactor.keyroot = keyroot
-    conn = reactor.wrap_socket(conn, server_side=True)
-
-    def from_client(sock, mask):
-        msg = reactor.recv_msg(sock)
-        if not msg:
-            selector.unregister(sock)
-            sock.close()
-            return True
-
-        # todo handle file ops directly
-        reactor.send_msg(pipe, msg)
-
-        return False
-
-    def from_server(sock, mask):
-        msg = reactor.recv_msg(sock)
-        if not msg:
-            selector.unregister(sock)
-            sock.close()
-            return True
-
-        reactor.send_msg(conn, msg)
-
-        return False
-
-    # data from client
-    conn.setblocking(False)
-    selector.register(conn, selectors.EVENT_READ, from_client)
-
-    # data from server process
-    pipe.setblocking(False)
-    selector.register(pipe, selectors.EVENT_READ, from_server)
-
     while running:
-        for key, mask in selector.select(timeout=1.0):
-            callback = key.data
-            closed = callback(key.fileobj, mask)
-            if closed:
-                running = False
-                break
+        time.sleep(3)
 
     log(f'Exit client_proc {addr[0]}:{addr[1]}')
 
 class SaltyServer(Reactor):
     def __init__(self, addr, **kwargs):
+        self.socks = []
         self.clients = {}
         self.facts = {}
         self.futures = {}
@@ -96,12 +90,11 @@ class SaltyServer(Reactor):
 
         self.crypto_pass = get_crypto_pass(self.keyroot)
 
-        self.selector = Selector()
-
         if isinstance(addr, socket.socket):
+            # handle passing in a socket directly, probably for bootstrap
             duh
         else:
-            self.listen(addr)
+            spawn_thread(self.listen, (addr,))
 
     def listen(self, addr):
         log(f'Listening on {addr[0]}:{addr[1]}')
@@ -109,60 +102,66 @@ class SaltyServer(Reactor):
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(addr)
         sock.listen(100)
-        sock.setblocking(False)
-        self.selector.register(sock, selectors.EVENT_READ, self.accept)
 
-    def accept(self, sock, mask):
-        conn, addr = sock.accept()
-        log(f'Connection established {addr[0]}:{addr[1]}')
+        while 1:
+            conn, addr = sock.accept()
 
-        # create a pipe for interacting with the subprocess
-        pipe, cpipe = socket.socketpair()
+            log(f'Connection established {addr[0]}:{addr[1]}')
 
-        # create subprocess, args here are pickled to the other process
-        spawn_process(client_proc, args=(conn, addr, self.keyroot, cpipe))
+            # create a pipe for interacting with the subprocess
+            pipe, cpipe = socket.socketpair()
 
-        # Accepted connection now handled by the sub-process, close
-        conn.close()
+            # create subprocess, args here are pickled to the other process
+            spawn_process(client_proc, args=(conn, addr, self.keyroot, cpipe))
 
-        # listen for events on our end of the pipe
-        pipe.setblocking(False)
-        self.selector.register(pipe, selectors.EVENT_READ, self.handle)
+            # Accepted connection now handled by the sub-process, close
+            conn.close()
 
-    def handle(self, conn, mask):
-        msg = self.recv_msg(conn)
-        if msg is not None:
-            self.handle_msg(msg, conn)
-        else:
-            self.selector.unregister(conn)
+            # listen for events on our end of the pipe
+            pipe = Socket(pipe)
+
+            self.socks.append(pipe)
 
     def serve_forever(self):
         while 1:
-            for key, mask in self.selector.select(timeout=5.0):
-                callback = key.data
-                callback(key.fileobj, mask)
+            readers, _, _ = select.select(self.socks, [], [], 1.0)
+            for reader in readers:
+                start = time.time()
+                closed = self.handle(reader)
+                print('server handle', time.time() - start)
+                if closed:
+                    self.socks.remove(reader)
 
-    def handle_identify(self, msg, q):
+    def handle(self, sock):
+        msg = sock.recv_msg()
+        log('Server handle', msg)
+        if msg is None:
+            return True
+        log('Server handle', msg['type'])
+        self.handle_msg(msg, sock)
+        return False
+
+    def handle_identify(self, msg, sock):
         client_id = msg['id']
         log(f'id:{client_id} facts:{msg["facts"]}')
-        self.clients[client_id] = q
+        self.clients[client_id] = sock
         self.facts[client_id] = msg['facts']
 
         #if not is_client and self.clients.get(client_id) is q:
         #    self.clients.pop(client_id)
 
-    def handle_ping(self, msg, q):
+    def handle_ping(self, msg, sock):
         if facts := msg.get('facts'):
             self.facts[msg['id']] = facts
-        self.send_msg(q, {'type': 'pong'})
+        sock.send_msg({'type': 'pong'})
 
-    def handle_hosts(self, msg, q):
+    def handle_hosts(self, msg, sock):
         meta = get_meta(self.fileroot, self.crypto_pass)
         hosts = self.get_hosts(meta)
         msg['hosts'] = {k: v for k, v in hosts.items() if v['facts']}
-        self.send_msg(q, msg)
+        sock.send_msg(msg)
 
-    def handle_get_file(self, msg, q):
+    def handle_get_file(self, msg, sock):
         path = os.path.join(self.fileroot, 'files', msg['path'])
 
         if os.path.exists(path + '.enc'):
@@ -189,24 +188,12 @@ class SaltyServer(Reactor):
             print(tb)
             msg['error'] = tb
 
-        self.send_msg(q, msg)
+        sock.send_msg(msg)
 
-    def handle_syncdir_get_file(self, msg, q):
-        msg['type'] = 'future'
+    def handle_syncdir_get_file(self, msg, sock):
+        syncdir_get_file(msg, sock)
 
-        try:
-            with open(msg['path'], 'rb') as f:
-                data = f.read()
-            msg['data'] = data
-        except Exception:
-            log_error('Exception handling msg in handle_syncdir_get_file:', msg)
-            tb = traceback.format_exc().strip()
-            print(tb)
-            msg['error'] = tb
-
-        self.send_msg(q, msg)
-
-    def handle_syncdir_scandir(self, msg, q):
+    def handle_syncdir_scandir(self, msg, sock):
         msg['type'] = 'future'
 
         try:
@@ -217,9 +204,9 @@ class SaltyServer(Reactor):
             print(tb)
             msg['error'] = tb
 
-        self.send_msg(q, msg)
+        sock.send_msg(msg)
 
-    def handle_server_shell(self, msg, q):
+    def handle_server_shell(self, msg, sock):
         msg['type'] = 'future'
 
         try:
@@ -236,7 +223,7 @@ class SaltyServer(Reactor):
             print(tb)
             msg['error'] = tb
 
-        self.send_msg(q, msg)
+        sock.send_msg(msg)
 
     def get_hosts(self, meta):
         hosts = {}
@@ -265,7 +252,7 @@ class SaltyServer(Reactor):
 
         return hosts
 
-    def handle_apply(self, msg, q):
+    def handle_apply(self, msg, sock):
         start = time.time()
         results = defaultdict(dict)
         msg_result = {'type': 'apply_result', 'results': results}
@@ -299,7 +286,7 @@ class SaltyServer(Reactor):
 
             context = {k: v for k, v in msg.items() if k not in ('type', 'target', 'roles', 'skip')}
 
-            for id, q2 in self.clients.items():
+            for id, client_sock in self.clients.items():
                 if id not in hosts:
                     log_error(f'Apply missing host {id} in metadata')
                     continue
@@ -329,7 +316,7 @@ class SaltyServer(Reactor):
                     ctx = {'id': id, 'role': role, 'hosts': hosts, 'me': hosts[id], 'bootstrap': False}
                     ctx.update(context)
                     msg = {'type': 'run', 'content': content, 'context': ctx}
-                    results[id][role] = (q2, msg)
+                    results[id][role] = (client_sock, msg)
 
             # scatter by host, then collect - roles must be run sequentially
             def dispatch(host_roles):
@@ -355,4 +342,4 @@ class SaltyServer(Reactor):
             msg_result['error'] = tb
 
         msg_result['elapsed'] = elapsed(start)
-        self.send_msg(q, msg_result)
+        sock.send_msg(msg_result)

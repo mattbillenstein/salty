@@ -7,7 +7,7 @@ import time
 
 from lib import crypto, operators
 from lib.compat import get_facts
-from lib.util import elapsed, get_crypto_pass, hash_data, log, log_error, pprint
+from lib.util import elapsed, get_crypto_pass, hash_data, log, log_error, pprint, print_error
 from client import SaltyClient
 from server import SaltyServer, get_meta
 
