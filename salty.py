@@ -278,7 +278,7 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
         msg['type'] = 'future'
 
         try:
-            msg['data'] = operators.syncdir_scandir_local(msg['path'])
+            msg['data'] = operators.syncdir_scandir_local(msg['path'], exclude=msg.get('exclude'))
         except Exception:
             log_error('Exception handling msg in handle_syncdir_scandir:', msg)
             tb = traceback.format_exc().strip()
@@ -464,8 +464,8 @@ class SaltyClient(Reactor):
             assert not msg.get('error'), msg['error']
             return msg
 
-        def syncdir_scandir(path):
-            msg = self.syncdir_scandir(q, path)
+        def syncdir_scandir(path, exclude=None):
+            msg = self.syncdir_scandir(q, path, exclude=exclude)
             assert not msg.get('error'), msg['error']
             return msg['data']
 
@@ -502,8 +502,8 @@ class SaltyClient(Reactor):
         msg = {'type': 'syncdir_get_file', 'path': path}
         return self.do_rpc(sock, msg)
 
-    def syncdir_scandir(self, sock, path):
-        msg = {'type': 'syncdir_scandir', 'path': path}
+    def syncdir_scandir(self, sock, path, exclude=None):
+        msg = {'type': 'syncdir_scandir', 'path': path, 'exclude': exclude}
         return self.do_rpc(sock, msg)
 
     def server_shell(self, sock, cmds, **kwds):
