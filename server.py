@@ -12,32 +12,7 @@ import gevent.server
 
 from lib import crypto, operators
 from lib.net import Reactor
-from lib.util import elapsed, get_crypto_pass, hash_data, log, log_error
-
-def get_meta(fileroot, crypto_pass=None):
-    # read installation metadata and optionally decrypt secrets
-    meta = {}
-    metapy = os.path.join(fileroot, 'meta.py')
-    if os.path.isfile(metapy):
-        # new format, single meta.py file
-        with open(metapy) as f:
-            exec(f.read(), meta)
-        meta = {k: v for k, v in meta.items() if k[0] != '_'}
-    else:
-        # old format, can probably remove now as of 2/15/2025, but leave this
-        # around awhile.
-        for fname in ('hosts', 'envs', 'clusters'):
-            with open(os.path.join(fileroot, 'meta', f'{fname}.py')) as f:
-                meta[fname] = {}
-                exec(f.read(), meta[fname])
-                for k in list(meta[fname]):
-                    if k.startswith('_'):
-                        meta[fname].pop(k)
-
-    if crypto_pass:
-        crypto.decrypt_dict(meta, crypto_pass)
-
-    return meta
+from lib.util import *
 
 class SaltyServer(gevent.server.StreamServer, Reactor):
     def __init__(self, *args, **kwargs):

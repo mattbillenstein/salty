@@ -9,9 +9,8 @@ from queue import Queue
 import gevent
 
 from lib import operators
-from lib.compat import get_facts
 from lib.net import Reactor, ConnectionTimeout
-from lib.util import elapsed, log, log_error
+from lib.util import *
 
 PING_INTERVAL = 10.0
 FACTS_INTERVAL = 60.0

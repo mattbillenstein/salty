@@ -4,6 +4,11 @@ import sys
 import time
 import os.path
 
+from .compat import get_facts
+from . import crypto
+
+__all__ = ['elapsed', 'get_crypto_pass', 'get_facts', 'get_meta', 'hash_data', 'hash_file', 'log', 'log_error', 'pprint', 'print_error']
+
 def log(*args, **kwargs):
     t = time.time()
     ms = f'{int(t % 1 * 1000):03d}'
@@ -47,3 +52,28 @@ def get_crypto_pass(keyroot):
         with open(fname) as f:
             return f.read().strip()
     return None
+
+def get_meta(fileroot, crypto_pass=None):
+    # read installation metadata and optionally decrypt secrets
+    meta = {}
+    metapy = os.path.join(fileroot, 'meta.py')
+    if os.path.isfile(metapy):
+        # new format, single meta.py file
+        with open(metapy) as f:
+            exec(f.read(), meta)
+        meta = {k: v for k, v in meta.items() if k[0] != '_'}
+    else:
+        # old format, can probably remove now as of 2/15/2025, but leave this
+        # around awhile.
+        for fname in ('hosts', 'envs', 'clusters'):
+            with open(os.path.join(fileroot, 'meta', f'{fname}.py')) as f:
+                meta[fname] = {}
+                exec(f.read(), meta[fname])
+                for k in list(meta[fname]):
+                    if k.startswith('_'):
+                        meta[fname].pop(k)
+
+    if crypto_pass:
+        crypto.decrypt_dict(meta, crypto_pass)
+
+    return meta
