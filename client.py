@@ -4,10 +4,17 @@ import socket
 import ssl
 import time
 import traceback
+from queue import Queue
+
+import gevent
 
 from lib import operators
+from lib.compat import get_facts
 from lib.net import Reactor, ConnectionTimeout
 from lib.util import elapsed, log, log_error
+
+PING_INTERVAL = 10.0
+FACTS_INTERVAL = 60.0
 
 class SaltyClient(Reactor):
     def __init__(self, addr, keyroot=os.getcwd(), id=None, path=''):
@@ -93,12 +100,56 @@ class SaltyClient(Reactor):
         msg = {'type': 'server_shell', 'cmds': cmds, 'kwds': kwds}
         return self.do_rpc(sock, msg)
 
+    def _pinger(self, q):
+        last_facts = time.time()
+        while 1:
+            now = time.time()
+            msg = {'type': 'ping'}
+            if now - last_facts > FACTS_INTERVAL:
+                # re-send facts every ~1m
+                msg['id'] = self.id
+                msg['facts'] = get_facts()
+                last_facts = now
+            self.send_msg(q, msg)
+            time.sleep(PING_INTERVAL)
+
+            # if no pong back, break
+            if (self._last_pong - now) > 6:
+                log_error('MISSING PONG', self._last_pong - now)
+                break
+
+    def handle(self, sock, addr):
+        log(f'Connection established {addr[0]}:{addr[1]}')
+        q = Queue()
+        g = gevent.spawn(self._writer, sock, q)
+
+        p = gevent.spawn(self._pinger, q)
+        self.send_msg(q, {'type': 'identify', 'id': self.id, 'facts': get_facts()})
+
+        try:
+            while 1:
+                try:
+                    # if writer / pinger dead, break and eventually close the
+                    # socket...
+                    if g.dead or p.dead:
+                        break
+
+                    msg = self.recv_msg(sock)
+                    self.handle_msg(msg, q)
+                except OSError:
+                    log(f'Connection lost {addr[0]}:{addr[1]}')
+                    break
+        finally:
+            g.kill()
+            p.kill()
+            sock.close()
+
     def serve_forever(self):
         while 1:
             sock = None
             try:
                 sock = self.connect()
-                self.handle(sock, self.addr, is_client=True)
+                self.handle(sock, self.addr)
             except KeyboardInterrupt:
                 break
             except Exception:

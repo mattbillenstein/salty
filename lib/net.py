@@ -7,7 +7,6 @@ import gevent
 import msgpack
 from gevent.event import AsyncResult
 
-from .compat import get_facts
 from .util import log, log_error
 
 class ConnectionTimeout(Exception):
@@ -30,14 +29,12 @@ def recvall(sock, size):
     return data
 
 class Reactor:
-
-    def do_rpc(self, sock, msg):
-        msg['future_id'] = id = str(uuid.uuid4())
-        self.futures[id] = ar = AsyncResult()
-        self.send_msg(sock, msg)
-        return ar.get()
+    # Reading/writing sockets and futures/rpc mixin, subclasses read and write
+    # whole messages which are just dicts {'type': '<type>', ...payload...}
 
     def send_msg(self, sock, msg):
+        # encode messages as 4-bytes message size (up to 4GiB) followed by a
+        # msgpack blob
         data = msgpack.packb(msg)
         data = struct.pack('!I', len(data)) + data
         if isinstance(sock, Queue):
@@ -51,35 +48,33 @@ class Reactor:
             data = recvall(sock, 4)
             size = struct.unpack('!I', data)[0]
             if size > 500_000_000:
+                # FIXME, this is only really a limit for big file copies,
+                # implement a chunked protocol for get_file / syncdir_get_file
+                # so we don't have to have the entire file in RAM... Perhaps
+                # 64MB chunks.
                 raise ConnectionError('Message too big')
 
             data = recvall(sock, size)
             return msgpack.unpackb(data)
 
     def _writer(self, sock, q):
+        # write to a socket in a separate greenlet reading from queue - this is
+        # mainly for message framing.
         while 1:
             msg = q.get()
             with gevent.Timeout(SOCKET_TIMEOUT, CONNECTION_TIMEOUT):
                 sock.sendall(msg)
 
-    def _pinger(self, q):
-        last_facts = time.time()
-        while 1:
-            now = time.time()
-            msg = {'type': 'ping'}
-            if now - last_facts > 60.0:
-                # re-send facts every ~1m
-                msg['id'] = self.id
-                msg['facts'] = get_facts()
-            self.send_msg(q, msg)
-            time.sleep(5)
-
-            # if no pong back, break
-            if (self._last_pong - now) > 6:
-                log_error('MISSING PONG', self._last_pong - now)
-                break
+    def do_rpc(self, sock, msg):
+        # Register a future using AsyncResult, send the request, and block
+        # until it's set
+        msg['future_id'] = id = str(uuid.uuid4())
+        self.futures[id] = ar = AsyncResult()
+        self.send_msg(sock, msg)
+        return ar.get()
 
     def handle_future(self, msg, q):
+        # Pull AsyncResult from registry and set it
         ar = self.futures.pop(msg['future_id'], None)
         if ar:
             ar.set(msg)
@@ -92,40 +87,3 @@ class Reactor:
             msg['error'] = f"Method {msg['type']} not found"
             self.send_msg(q, msg)
             log_error(f'Unhandled message: {msg}')
-
-    def handle(self, sock, addr, is_client=False):
-        log(f'Connection established {addr[0]}:{addr[1]}')
-        client_id = None
-        q = Queue()
-        g = gevent.spawn(self._writer, sock, q)
-
-        p = None
-        if is_client:
-            p = gevent.spawn(self._pinger, q)
-            self.send_msg(q, {'type': 'identify', 'id': self.id, 'facts': get_facts()})
-
-        try:
-            while 1:
-                try:
-                    # if writer dead, break and eventually close the socket...
-                    if g.dead or (p and p.dead):
-                        break
-
-                    msg = self.recv_msg(sock)
-                    if msg['type'] == 'identify':
-                        client_id = msg['id']
-                        log(f'id:{client_id} facts:{msg["facts"]}')
-                        self.clients[client_id] = q
-                        self.facts[client_id] = msg['facts']
-                    else:
-                        self.handle_msg(msg, q)
-                except OSError:
-                    log(f'Connection lost {addr[0]}:{addr[1]}')
-                    break
-        finally:
-            if not is_client and self.clients.get(client_id) is q:
-                self.clients.pop(client_id)
-            g.kill()
-            if p:
-                p.kill()
-            sock.close()

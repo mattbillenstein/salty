@@ -5,6 +5,7 @@ import subprocess
 import time
 import traceback
 from collections import defaultdict
+from queue import Queue
 
 import gevent
 import gevent.server
@@ -48,6 +49,36 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
         self.crypto_pass = get_crypto_pass(keyroot)
 
         super().__init__(*args, **kwargs)
+
+    def handle(self, sock, addr):
+        log(f'Connection established {addr[0]}:{addr[1]}')
+        client_id = None
+        q = Queue()
+        g = gevent.spawn(self._writer, sock, q)
+
+        try:
+            while 1:
+                try:
+                    # if writer dead, break and eventually close the socket...
+                    if g.dead:
+                        break
+
+                    msg = self.recv_msg(sock)
+                    if msg['type'] == 'identify':
+                        client_id = msg['id']
+                        log(f'id:{client_id} facts:{msg["facts"]}')
+                        self.clients[client_id] = q
+                        self.facts[client_id] = msg['facts']
+                    else:
+                        self.handle_msg(msg, q)
+                except OSError:
+                    log(f'Connection lost {addr[0]}:{addr[1]}')
+                    break
+        finally:
+            if self.clients.get(client_id) is q:
+                self.clients.pop(client_id)
+            g.kill()
+            sock.close()
 
     def handle_ping(self, msg, q):
         if facts := msg.get('facts'):
