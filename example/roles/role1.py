@@ -12,4 +12,4 @@ shell('''
 echo "The date is $(date)"
 ''')
 
-syncdir('foo', '/foo', exclude=['bar/boo'])
+syncdir('foo', '/foo', exclude=['bar/boo/foo.txt'])

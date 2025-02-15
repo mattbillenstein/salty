@@ -434,8 +434,10 @@ def syncdir_scandir_local(src, exclude=None):
         elif entry.is_file():
             attrs['type'] = 'file'
         elif entry.is_dir():
-            # need to strip off parent dir from exclude
-            nexclude = [_ for _ in [_.split(os.path.sep, 1)[1] if os.path.sep in _ else None for _ in exclude] if _]
+            # filter to matches on entry.name + '/' and then strip that prefix
+            prefix = entry.name + os.path.sep
+            nexclude = [_ for _ in exclude if _.startswith(prefix)]
+            nexclude = [_.replace(prefix, '', 1) for _ in nexclude]
             attrs['type'] = 'dir'
             attrs['entries'] = syncdir_scandir_local(os.path.join(src, entry.name), exclude=nexclude)
         else:
