@@ -424,8 +424,7 @@ def syncdir_scandir_local(src, exclude=None):
         elif entry.is_dir():
             # filter to matches on entry.name + '/' and then strip that prefix
             prefix = entry.name + os.path.sep
-            nexclude = [_ for _ in exclude if _.startswith(prefix)]
-            nexclude = [_.replace(prefix, '', 1) for _ in nexclude]
+            nexclude = [_.replace(prefix, '', 1) for _ in exclude if _.startswith(prefix)]
             attrs['type'] = 'dir'
             attrs['entries'] = syncdir_scandir_local(os.path.join(src, entry.name), exclude=nexclude)
         else:
