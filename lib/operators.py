@@ -327,7 +327,7 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
         result['elapsed'] = elapsed(start)
         return result
 
-    def syncdir(src, dst, user=DEFAULT_USER, mode=0o755):
+    def syncdir(src, dst, user=DEFAULT_USER, mode=0o755, exclude=None):
         # add user and matching group if they do not exist
         start = time.time()
         result = {'cmd': f'syncdir({src}, {dst}, user={user})', 'rc': 0, 'changed': False, 'created': False}
@@ -342,7 +342,11 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
                 result['created'] = True
                 result['changed'] = True
 
-            srcs = syncdir_scandir(src)  # rpc
+            exclude = exclude or []
+            if any(_.startswith(os.path.sep) for _ in exclude):
+                raise Exception(f'Exclude starts with {os.path.sep} but is relative to src dir')
+
+            srcs = syncdir_scandir(src, exclude=exclude)  # rpc
             dsts = syncdir_scandir_local(dst)
             changes = _syncdir(src, dst, user, srcs, dsts, syncdir_get_file)
             result['changed'] = result['changed'] or len(changes) > 0
@@ -394,10 +398,14 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
 
     return results, output
 
-def syncdir_scandir_local(src):
+def syncdir_scandir_local(src, exclude=None):
     # scan directory and return metadata, on server and client
+    exclude = exclude or []
     d = {}
     for entry in os.scandir(src):
+        if entry.name in exclude:
+            continue
+
         st = entry.stat(follow_symlinks=False)
         attrs = {
             'mode': st.st_mode & 0o777,
@@ -414,8 +422,12 @@ def syncdir_scandir_local(src):
         elif entry.is_file():
             attrs['type'] = 'file'
         elif entry.is_dir():
+            # filter to matches on entry.name + '/' and then strip that prefix
+            prefix = entry.name + os.path.sep
+            nexclude = [_ for _ in exclude if _.startswith(prefix)]
+            nexclude = [_.replace(prefix, '', 1) for _ in nexclude]
             attrs['type'] = 'dir'
-            attrs['entries'] = syncdir_scandir_local(os.path.join(src, entry.name))
+            attrs['entries'] = syncdir_scandir_local(os.path.join(src, entry.name), exclude=nexclude)
         else:
             raise Exception(f'Unrecognized type {src}/{entry.name}')
 

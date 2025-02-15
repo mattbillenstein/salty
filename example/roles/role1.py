@@ -12,4 +12,4 @@ for i in range(3):
 # and you can run shell on the remote
 shell('echo "The date is $(date)"')
 
-syncdir('foo', '/foo')
+syncdir('foo', '/foo', exclude=['bar/boo/foo.txt'])

@@ -108,7 +108,7 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
         msg['type'] = 'future'
 
         try:
-            msg['data'] = operators.syncdir_scandir_local(msg['path'])
+            msg['data'] = operators.syncdir_scandir_local(msg['path'], exclude=msg.get('exclude'))
         except Exception:
             log_error('Exception handling msg in handle_syncdir_scandir:', msg)
             tb = traceback.format_exc().strip()
