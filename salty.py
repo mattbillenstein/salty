@@ -19,6 +19,7 @@ from server import SaltyServer, get_meta
 
 
 def parse_args(args):
+    # FIXME, argparse?
     mode = 'help'
     if args:
         mode, args = args[0], args[1:]
@@ -48,6 +49,12 @@ def parse_args(args):
     return mode, hostport, args, opts, verbose
 
 def cli(hostport, args, opts, verbose, bootstrap=False):
+    # Salty CLI entry point
+    #
+    # Instantiate a Client and run a command specified from cli args
+    #
+    # Optionally in bootstrap mode, also instantiate the Client/Server running
+    # in their own greenlets that the CLI Client will use.
     start = time.time()
 
     if bootstrap:
@@ -63,14 +70,18 @@ def cli(hostport, args, opts, verbose, bootstrap=False):
 
         args = ['type=apply', 'bootstrap=true'] + args
 
+    # Capture message args from cli, ex:
+    #
+    # type=apply roles=foo,bar target=host1 i=1 f=3.14 b=true
+    #
+    # {'type': 'apply', 'roles': ['foo', 'bar'], 'target': 'host1' 'i': 1, 'f': 3.14, 'b': True}
     msg = {}
-    # type=apply roles=foo,bar target=host1
     for arg in args:
         if not arg[0] == '-':
             k, v = arg.split('=', 1)
 
-            # list of string
             if ',' in v or k in ('roles', 'skip'):
+                # list of string
                 v = [_ for _ in v.split(',') if _]
             elif v.lower() == 'true':
                 v = True
@@ -90,6 +101,8 @@ def cli(hostport, args, opts, verbose, bootstrap=False):
         log_error(f'Errors in result:\n{result["error"]}')
         return 1
 
+    # Unpack apply result and based on verbosity, display changed/errored
+    # hosts/roles, all hosts/roles, or all hosts/roles/cmds
     if msg['type'] == 'apply':
         for host, roles in result['results'].items():
             changed = 0
@@ -126,6 +139,7 @@ def cli(hostport, args, opts, verbose, bootstrap=False):
         print()
         print(f'elapsed:{elapsed(start):.3f}')
     else:
+        # otherwise, just pprint the message
         pprint(result)
 
     if bootstrap:
@@ -145,17 +159,22 @@ def main(*args):
         print(f"Usage: ./salty.py ({' | '.join(modes)}) [args]")
 
     elif mode == 'facts':
+        # Show facts for current host
         pprint(get_facts())
 
     elif mode == 'meta':
-        fileroot = ops.get('fileroot', os.getcwd())
+        # Read and display metadata directly
+        fileroot = opts.get('fileroot', os.getcwd())
         crypto_pass = None
         if keyroot := opts.get('keyroot'):
             crypto_pass = get_crypto_pass(keyroot)
         pprint(get_meta(fileroot, crypto_pass))
 
     elif mode == 'genkey':
-        # FIXME, use openssl python module...
+        # Generate local tls keys and random crypto pass - this can be used to
+        # init a new installation's keys
+        #
+        # FIXME, use openssl python module?
         os.system('openssl req -new -newkey rsa:4096 -days 3650 -nodes -x509 -subj "/C=US/ST=CA/L=SF/O=A/CN=B" -keyout key.pem -out cert.pem')
         with open('crypto.pass', 'w') as f:
             f.write(hash_data(os.urandom(1024)))
@@ -167,7 +186,10 @@ def main(*args):
             log('Exit.')
 
     elif mode == 'client':
-        SaltyClient(hostport, **opts).serve_forever()
+        try:
+            SaltyClient(hostport, **opts).serve_forever()
+        except KeyboardInterrupt:
+            log('Exit.')
 
     elif mode in ('cli', 'bootstrap'):
         return cli(hostport, args, opts, verbose, mode == 'bootstrap')

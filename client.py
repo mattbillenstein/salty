@@ -22,8 +22,8 @@ class SaltyClient(Reactor):
         self.id = id
         self.keyroot = keyroot
         self.path = path
-        self.futures = {}
         self._last_pong = time.time()
+        self.futures = {}
 
     def connect(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -42,8 +42,12 @@ class SaltyClient(Reactor):
         self._last_pong = time.time()
 
     def handle_run(self, msg, q):
+        # Run a role on this client and report back results of each command
         start = time.time()
 
+        # these closures mainly capture the Queue that we write the rpcs to
+        # during the run for these functions which get injected into the global
+        # namespace for the role python file being exec'd
         def get_file(path, **opts):
             msg = self.get_file(q, path, **opts)
             assert not msg.get('error'), msg['error']
@@ -64,7 +68,7 @@ class SaltyClient(Reactor):
             assert not msg.get('error'), msg['error']
             return msg['data']
 
-        content = msg.pop('content')
+        content = msg.pop('content')  # this is the role python file we will exec
         results, output = operators.run(
             content,
             msg['context'],
@@ -83,6 +87,8 @@ class SaltyClient(Reactor):
         rc = sum(_['rc'] for _ in results)
         log(f'Run {msg["context"]["id"]} {msg["context"]["role"]} {rc} {msg["result"]["elapsed"]:.6f}')
 
+    # RPC wrappers
+
     def get_file(self, sock, path, **opts):
         msg = {'type': 'get_file', 'path': path}
         msg.update(opts)
@@ -100,7 +106,13 @@ class SaltyClient(Reactor):
         msg = {'type': 'server_shell', 'cmds': cmds, 'kwds': kwds}
         return self.do_rpc(sock, msg)
 
+    # / RPC wrappers
+
     def _pinger(self, q):
+        # keep our long-lived socket alive, ping every N seconds and update
+        # facts periodically, if we don't get a pong back in 1.5x the ping
+        # interval, consider the socket stuck and exit - this will cause the
+        # handle function to exit and the serve_forever loop to re-connect.
         last_facts = time.time()
         while 1:
             now = time.time()
@@ -110,15 +122,23 @@ class SaltyClient(Reactor):
                 msg['id'] = self.id
                 msg['facts'] = get_facts()
                 last_facts = now
+
             self.send_msg(q, msg)
             time.sleep(PING_INTERVAL)
 
             # if no pong back, break
-            if (self._last_pong - now) > 6:
+            #
+            # this could cause issues if we're sending very large files over
+            # slow connections and the pong could be behind a lot of other
+            # messages...
+            if (self._last_pong - now) > (PING_INTERVAL * 1.5):
                 log_error('MISSING PONG', self._last_pong - now)
                 break
 
     def handle(self, sock, addr):
+        # Connection main loop, handle messages received from the server and
+        # create two threads; one that writes messages back to the socket from
+        # a Queue, and another that pings the server every N seconds
         log(f'Connection established {addr[0]}:{addr[1]}')
         q = Queue()
         g = gevent.spawn(self._writer, sock, q)
@@ -145,6 +165,9 @@ class SaltyClient(Reactor):
             sock.close()
 
     def serve_forever(self):
+        # Connect loop, connect to the server creating a socket and pass that
+        # to handle - If handle raises or exits, take a short break and
+        # reconnect.
         while 1:
             sock = None
             try:
@@ -155,12 +178,16 @@ class SaltyClient(Reactor):
             except Exception:
                 tb = traceback.format_exc().strip()
                 log_error('Exception in client serve:\n', tb)
-                time.sleep(3)
             finally:
                 if sock:
                     sock.close()
+                    sock = None
+
+            time.sleep(3)
 
     def run(self, msg):
+        # Run a single message and return result - used by the cli for
+        # apply/hosts/etc
         sock = self.connect()
         self.send_msg(sock, msg)
 

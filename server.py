@@ -15,13 +15,17 @@ from lib.net import Reactor
 from lib.util import elapsed, get_crypto_pass, hash_data, log, log_error
 
 def get_meta(fileroot, crypto_pass=None):
+    # read installation metadata and optionally decrypt secrets
     meta = {}
     metapy = os.path.join(fileroot, 'meta.py')
     if os.path.isfile(metapy):
+        # new format, single meta.py file
         with open(metapy) as f:
             exec(f.read(), meta)
         meta = {k: v for k, v in meta.items() if k[0] != '_'}
     else:
+        # old format, can probably remove now as of 2/15/2025, but leave this
+        # around awhile.
         for fname in ('hosts', 'envs', 'clusters'):
             with open(os.path.join(fileroot, 'meta', f'{fname}.py')) as f:
                 meta[fname] = {}
@@ -92,8 +96,10 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
         self.send_msg(q, msg)
 
     def handle_get_file(self, msg, q):
+        # serve files from <fileroot>/files
         path = os.path.join(self.fileroot, 'files', msg['path'])
 
+        # automatically decrypt files ending with .enc
         if os.path.exists(path + '.enc'):
             path += '.enc'
 
@@ -121,6 +127,8 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
         self.send_msg(q, msg)
 
     def handle_syncdir_get_file(self, msg, q):
+        # syncdir get_file uses absolute paths and does no decryption - this is
+        # part of the interface for a home-grown rsync
         msg['type'] = 'future'
 
         try:
@@ -136,6 +144,7 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
         self.send_msg(q, msg)
 
     def handle_syncdir_scandir(self, msg, q):
+        # recursively scan a local path and return all found file/dir metadata
         msg['type'] = 'future'
 
         try:
@@ -149,6 +158,7 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
         self.send_msg(q, msg)
 
     def handle_server_shell(self, msg, q):
+        # run a shell command and return output and return code
         msg['type'] = 'future'
 
         try:
@@ -168,6 +178,7 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
         self.send_msg(q, msg)
 
     def get_hosts(self, meta):
+        # Return host metadata / facts for all available hosts
         hosts = {}
         for cluster, servers in meta['hosts'].items():
             for id, data in servers.items():
@@ -195,6 +206,9 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
         return hosts
 
     def handle_apply(self, msg, q):
+        # Apply roles to all connected hosts and return status on everything
+        # that was run. This does a scatter/gather on each host for each role
+        # executed in order.
         start = time.time()
         results = defaultdict(dict)
         msg_result = {'type': 'apply_result', 'results': results}
