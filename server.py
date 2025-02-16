@@ -11,10 +11,10 @@ import gevent
 import gevent.server
 
 from lib import crypto, operators
-from lib.net import Reactor
+from lib.net import MsgMixin
 from lib.util import elapsed, get_crypto_pass, get_meta, hash_data, log, log_error
 
-class SaltyServer(gevent.server.StreamServer, Reactor):
+class SaltyServer(gevent.server.StreamServer, MsgMixin):
     def __init__(self, *args, **kwargs):
         self.clients = {}
         self.facts = {}

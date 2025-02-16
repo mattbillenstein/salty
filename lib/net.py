@@ -28,7 +28,7 @@ def recvall(sock, size):
             break
     return data
 
-class Reactor:
+class MsgMixin:
     # Reading/writing sockets and futures/rpc mixin, subclasses read and write
     # whole messages which are just dicts {'type': '<type>', ...payload...}
 

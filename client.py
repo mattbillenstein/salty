@@ -9,13 +9,13 @@ from queue import Queue
 import gevent
 
 from lib import operators
-from lib.net import Reactor, ConnectionTimeout
+from lib.net import MsgMixin, ConnectionTimeout
 from lib.util import elapsed, get_facts, log, log_error
 
 PING_INTERVAL = 10.0
 FACTS_INTERVAL = 60.0
 
-class SaltyClient(Reactor):
+class SaltyClient(MsgMixin):
     def __init__(self, addr, keyroot=os.getcwd(), id=None, path=''):
         self.addr = addr
         self.id = id
