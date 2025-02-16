@@ -1,4 +1,8 @@
+import os
+import os.path
+import socket
 import struct
+import ssl
 import uuid
 from queue import Queue
 
@@ -31,6 +35,19 @@ def recvall(sock, size):
 class MsgMixin:
     # Reading/writing sockets and futures/rpc mixin, subclasses read and write
     # whole messages which are just dicts {'type': '<type>', ...payload...}
+
+    def wrap_socket(self, sock, server_side=False):
+        proto = ssl.PROTOCOL_TLS_CLIENT
+        if server_side:
+            proto = ssl.PROTOCOL_TLS_SERVER
+        ctx = ssl.SSLContext(proto)
+        ctx.check_hostname = False
+        ctx.load_cert_chain(
+            certfile=os.path.join(self.keyroot, 'cert.pem'),
+            keyfile=os.path.join(self.keyroot, 'key.pem'),
+        )
+        ctx.load_verify_locations(os.path.join(self.keyroot, 'cert.pem'))
+        return ctx.wrap_socket(sock, server_side=server_side)
 
     def send_msg(self, sock, msg):
         # encode messages as 4-bytes message size (up to 4GiB) followed by a

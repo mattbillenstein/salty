@@ -26,14 +26,7 @@ class SaltyClient(MsgMixin):
 
     def connect(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.check_hostname = False
-        ctx.load_cert_chain(
-            certfile=os.path.join(self.keyroot, 'cert.pem'),
-            keyfile=os.path.join(self.keyroot, 'key.pem'),
-        )
-        ctx.load_verify_locations(os.path.join(self.keyroot, 'cert.pem'))
-        sock = ctx.wrap_socket(sock)
+        sock = self.wrap_socket(sock)
         sock.connect(self.addr)
         return sock
 

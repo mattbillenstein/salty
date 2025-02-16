@@ -19,18 +19,18 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
         self.clients = {}
         self.facts = {}
         self.futures = {}
+
         self.fileroot = kwargs.pop('fileroot', os.getcwd())
-
-        keyroot = kwargs.pop('keyroot', os.getcwd())
-        kwargs['keyfile'] = os.path.join(keyroot, 'key.pem')
-        kwargs['certfile'] = os.path.join(keyroot, 'cert.pem')
-
-        self.crypto_pass = get_crypto_pass(keyroot)
+        self.keyroot = kwargs.pop('keyroot', os.getcwd())
+        self.crypto_pass = get_crypto_pass(self.keyroot)
 
         super().__init__(*args, **kwargs)
 
     def handle(self, sock, addr):
         log(f'Connection established {addr[0]}:{addr[1]}')
+
+        sock = self.wrap_socket(sock, server_side=True)
+
         client_id = None
         q = Queue()
         g = gevent.spawn(self._writer, sock, q)
@@ -68,88 +68,6 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
         meta = get_meta(self.fileroot, self.crypto_pass)
         hosts = self.get_hosts(meta)
         msg['hosts'] = {k: v for k, v in hosts.items() if v['facts']}
-        self.send_msg(q, msg)
-
-    def handle_get_file(self, msg, q):
-        # serve files from <fileroot>/files
-        path = os.path.join(self.fileroot, 'files', msg['path'])
-
-        # automatically decrypt files ending with .enc
-        if os.path.exists(path + '.enc'):
-            path += '.enc'
-
-        msg['type'] = 'future'
-
-        try:
-            with open(path, 'rb') as f:
-                data = f.read()
-
-            if path.endswith('.enc'):
-                data = crypto.decrypt(data, self.crypto_pass)
-
-            hash = hash_data(data)
-            if msg.get('hash') != hash:
-                msg['data'] = data
-                msg['hash'] = hash
-
-            msg['mode'] = os.stat(path).st_mode & 0o777
-        except Exception:
-            log_error('Exception handling msg in handle_get_file:', msg)
-            tb = traceback.format_exc().strip()
-            print(tb)
-            msg['error'] = tb
-
-        self.send_msg(q, msg)
-
-    def handle_syncdir_get_file(self, msg, q):
-        # syncdir get_file uses absolute paths and does no decryption - this is
-        # part of the interface for a home-grown rsync
-        msg['type'] = 'future'
-
-        try:
-            with open(msg['path'], 'rb') as f:
-                data = f.read()
-            msg['data'] = data
-        except Exception:
-            log_error('Exception handling msg in handle_syncdir_get_file:', msg)
-            tb = traceback.format_exc().strip()
-            print(tb)
-            msg['error'] = tb
-
-        self.send_msg(q, msg)
-
-    def handle_syncdir_scandir(self, msg, q):
-        # recursively scan a local path and return all found file/dir metadata
-        msg['type'] = 'future'
-
-        try:
-            msg['data'] = operators.syncdir_scandir_local(msg['path'], exclude=msg.get('exclude'))
-        except Exception:
-            log_error('Exception handling msg in handle_syncdir_scandir:', msg)
-            tb = traceback.format_exc().strip()
-            print(tb)
-            msg['error'] = tb
-
-        self.send_msg(q, msg)
-
-    def handle_server_shell(self, msg, q):
-        # run a shell command and return output and return code
-        msg['type'] = 'future'
-
-        try:
-            start = time.time()
-            p = subprocess.run(msg['cmds'], shell=True, capture_output=True, **msg['kwds'])
-            msg['data'] = {
-                'rc': p.returncode,
-                'output': p.stdout.decode('utf8') + '\n' + p.stderr.decode('utf8'),
-                'elapsed': elapsed(start),
-            }
-        except Exception:
-            log_error('Exception handling msg in handle_server_shell:', msg)
-            tb = traceback.format_exc().strip()
-            print(tb)
-            msg['error'] = tb
-
         self.send_msg(q, msg)
 
     def get_hosts(self, meta):
@@ -274,3 +192,92 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
 
         msg_result['elapsed'] = elapsed(start)
         self.send_msg(q, msg_result)
+
+#class ClientProc(MsgMixin):
+#    # Do heavy lifting for a client connection in another process, proxy
+#    # unhandled messages to the actual server.
+#
+#    def __init__(self, sock, fileroot, keyroot):
+#        pass
+
+    def handle_get_file(self, msg, q):
+        # serve files from <fileroot>/files
+        path = os.path.join(self.fileroot, 'files', msg['path'])
+
+        # automatically decrypt files ending with .enc
+        if os.path.exists(path + '.enc'):
+            path += '.enc'
+
+        msg['type'] = 'future'
+
+        try:
+            with open(path, 'rb') as f:
+                data = f.read()
+
+            if path.endswith('.enc'):
+                data = crypto.decrypt(data, self.crypto_pass)
+
+            hash = hash_data(data)
+            if msg.get('hash') != hash:
+                msg['data'] = data
+                msg['hash'] = hash
+
+            msg['mode'] = os.stat(path).st_mode & 0o777
+        except Exception:
+            log_error('Exception handling msg in handle_get_file:', msg)
+            tb = traceback.format_exc().strip()
+            print(tb)
+            msg['error'] = tb
+
+        self.send_msg(q, msg)
+
+    def handle_syncdir_get_file(self, msg, q):
+        # syncdir get_file uses absolute paths and does no decryption - this is
+        # part of the interface for a home-grown rsync
+        msg['type'] = 'future'
+
+        try:
+            with open(msg['path'], 'rb') as f:
+                data = f.read()
+            msg['data'] = data
+        except Exception:
+            log_error('Exception handling msg in handle_syncdir_get_file:', msg)
+            tb = traceback.format_exc().strip()
+            print(tb)
+            msg['error'] = tb
+
+        self.send_msg(q, msg)
+
+    def handle_syncdir_scandir(self, msg, q):
+        # recursively scan a local path and return all found file/dir metadata
+        msg['type'] = 'future'
+
+        try:
+            msg['data'] = operators.syncdir_scandir_local(msg['path'], exclude=msg.get('exclude'))
+        except Exception:
+            log_error('Exception handling msg in handle_syncdir_scandir:', msg)
+            tb = traceback.format_exc().strip()
+            print(tb)
+            msg['error'] = tb
+
+        self.send_msg(q, msg)
+
+    def handle_server_shell(self, msg, q):
+        # run a shell command and return output and return code
+        msg['type'] = 'future'
+
+        try:
+            start = time.time()
+            p = subprocess.run(msg['cmds'], shell=True, capture_output=True, **msg['kwds'])
+            msg['data'] = {
+                'rc': p.returncode,
+                'output': p.stdout.decode('utf8') + '\n' + p.stderr.decode('utf8'),
+                'elapsed': elapsed(start),
+            }
+        except Exception:
+            log_error('Exception handling msg in handle_server_shell:', msg)
+            tb = traceback.format_exc().strip()
+            print(tb)
+            msg['error'] = tb
+
+        self.send_msg(q, msg)
