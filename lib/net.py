@@ -24,7 +24,7 @@ def recvall(sock, size):
     # Loop until we get size bytes...
     data = b''
     while 1:
-        newdata = sock.read(size - len(data))
+        newdata = sock.recv(size - len(data))
         if not newdata:
             raise ConnectionError('Socket dead')
         data += newdata
@@ -50,13 +50,11 @@ class MsgMixin:
         return ctx.wrap_socket(sock, server_side=server_side)
 
     def send_msg(self, sock, msg):
+        assert not isinstance(sock, Queue)
         # encode messages as 4-bytes message size (up to 4GiB) followed by a
         # msgpack blob
         data = msgpack.packb(msg)
         data = struct.pack('!I', len(data)) + data
-        if isinstance(sock, Queue):
-            sock.put(data)
-            return len(data)
         with gevent.Timeout(SOCKET_TIMEOUT, CONNECTION_TIMEOUT):
             sock.sendall(data)
 
@@ -74,13 +72,20 @@ class MsgMixin:
             data = recvall(sock, size)
             return msgpack.unpackb(data)
 
-    def _writer(self, sock, q):
-        # write to a socket in a separate greenlet reading from queue - this is
-        # mainly for message framing.
+    def _writer(self, q, sock):
+        # read from q and write to sock in a separate greenlet - mainly for
+        # message framing...
         while 1:
             msg = q.get()
             with gevent.Timeout(SOCKET_TIMEOUT, CONNECTION_TIMEOUT):
-                sock.sendall(msg)
+                self.send_msg(sock, msg)
+
+    def _reader(self, sock, q):
+        # read from sock and put to q in a separate greenlet
+        while 1:
+            with gevent.Timeout(SOCKET_TIMEOUT, CONNECTION_TIMEOUT):
+                msg = self.recv_msg(sock)
+            q.put(msg)
 
     def do_rpc(self, sock, msg):
         # Register a future using AsyncResult, send the request, and block
@@ -102,5 +107,5 @@ class MsgMixin:
             gevent.spawn(method, msg, q)
         else:
             msg['error'] = f"Method {msg['type']} not found"
-            self.send_msg(q, msg)
+            q.put(msg)
             log_error(f'Unhandled message: {msg}')

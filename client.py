@@ -115,7 +115,7 @@ class SaltyClient(MsgMixin):
                 msg['facts'] = get_facts()
                 last_facts = now
 
-            self.send_msg(q, msg)
+            q.put(msg)
             time.sleep(PING_INTERVAL)
 
             # if no pong back, break
@@ -133,10 +133,10 @@ class SaltyClient(MsgMixin):
         # a Queue, and another that pings the server every N seconds
         log(f'Connection established {addr[0]}:{addr[1]}')
         q = Queue()
-        g = gevent.spawn(self._writer, sock, q)
+        g = gevent.spawn(self._writer, q, sock)
 
         p = gevent.spawn(self._pinger, q)
-        self.send_msg(q, {'type': 'identify', 'id': self.id, 'facts': get_facts()})
+        q.put({'type': 'identify', 'id': self.id, 'facts': get_facts()})
 
         try:
             while 1:

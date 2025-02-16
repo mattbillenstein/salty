@@ -1,7 +1,9 @@
 import fnmatch
 import os
 import os.path
+import socket
 import subprocess
+import sys
 import time
 import traceback
 from collections import defaultdict
@@ -12,7 +14,9 @@ import gevent.server
 
 from lib import crypto, operators
 from lib.net import MsgMixin
-from lib.util import elapsed, get_crypto_pass, get_meta, hash_data, log, log_error
+from lib.util import elapsed, get_crypto_pass, get_meta, hash_data, log, log_error, spawn_process
+
+print('server', os.getpid())
 
 class SaltyServer(gevent.server.StreamServer, MsgMixin):
     def __init__(self, *args, **kwargs):
@@ -24,16 +28,32 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
         self.keyroot = kwargs.pop('keyroot', os.getcwd())
         self.crypto_pass = get_crypto_pass(self.keyroot)
 
-        super().__init__(*args, **kwargs)
+        addr = args[0]
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(addr)
+        sock.listen(100)
+        sock.set_inheritable(False)
 
-    def handle(self, sock, addr):
+        super().__init__(sock, *args[1:], **kwargs)
+
+    def handle(self, client_sock, addr):
         log(f'Connection established {addr[0]}:{addr[1]}')
 
-        sock = self.wrap_socket(sock, server_side=True)
+        sock, server_sock = socket.socketpair()
+
+        # create subprocess, args here are pickled to the other process
+        print('Spawn in', os.getpid())
+        spawn_process(client_proc, args=(client_sock, server_sock, self.keyroot, self.fileroot, self.socket.fileno()))
+        print('after spawn', os.getpid())
+
+        # Accepted connection now handled by the sub-process, close
+        server_sock.close()
+        client_sock.close()
 
         client_id = None
         q = Queue()
-        g = gevent.spawn(self._writer, sock, q)
+        g = gevent.spawn(self._writer, q, sock)
 
         try:
             while 1:
@@ -62,7 +82,7 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
     def handle_ping(self, msg, q):
         if facts := msg.get('facts'):
             self.facts[msg['id']] = facts
-        self.send_msg(q, {'type': 'pong'})
+        q.put({'type': 'pong'})
 
     def handle_hosts(self, msg, q):
         meta = get_meta(self.fileroot, self.crypto_pass)
@@ -193,12 +213,64 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
         msg_result['elapsed'] = elapsed(start)
         self.send_msg(q, msg_result)
 
-#class ClientProc(MsgMixin):
-#    # Do heavy lifting for a client connection in another process, proxy
-#    # unhandled messages to the actual server.
-#
-#    def __init__(self, sock, fileroot, keyroot):
-#        pass
+
+def client_proc(client_sock, server_sock, keyroot, fileroot, server_listener_fd):
+    print('client', os.getpid())
+    print(client_sock.fileno(), server_sock.fileno(), server_listener_fd)
+    #print('closing', server_listener_fd)
+    os.close(server_listener_fd)
+    ClientProc(client_sock, server_sock, keyroot, fileroot).serve_forever()
+
+
+class ClientProc(MsgMixin):
+
+    # Do heavy lifting for a client connection in another process, proxy
+    # unhandled messages to the actual server.
+
+    def __init__(self, client_sock, server_sock, keyroot, fileroot):
+        self.keyroot = keyroot
+        self.fileroot = fileroot
+        self.client_sock = self.wrap_socket(client_sock, server_side=True)
+        self.server_sock = server_sock
+
+    def serve_forever(self):
+        client_q = Queue()
+        server_q = Queue()
+
+        # reader server_sock -> client_q
+        s2c = gevent.spawn(self._reader, self.server_sock, client_q)
+
+        # writer client_q -> client_sock
+        c2c = gevent.spawn(self._writer, client_q, self.client_sock)
+
+        # writer server_q -> server_sock
+        s2s = gevent.spawn(self._writer, server_q, self.server_sock)
+
+        threads = (s2c, c2c, s2s)
+
+        # and in this thread,
+        # reader client_sock -> client_q or server_q
+
+        try:
+            while 1:
+                try:
+                    if any(_.dead for _ in threads):
+                        break
+
+                    msg = self.recv_msg(self.client_sock)
+                    method = getattr(self, 'handle_' + msg['type'], None)
+                    if method:
+                        gevent.spawn(method, msg, client_q)
+                    else:
+                        server_q.put(msg)
+                except OSError:
+                    addr = self.client_sock.getpeername()
+                    log(f'Connection lost {addr[0]}:{addr[1]}')
+                    break
+        finally:
+            [_.kill() for _ in threads]
+            self.client_sock.close()
+            self.server_sock.close()
 
     def handle_get_file(self, msg, q):
         # serve files from <fileroot>/files

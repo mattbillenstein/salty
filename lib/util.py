@@ -1,5 +1,6 @@
 import hashlib
 import json
+import multiprocessing
 import sys
 import time
 import os.path
@@ -75,3 +76,12 @@ def get_meta(fileroot, crypto_pass=None):
         crypto.decrypt_dict(meta, crypto_pass)
 
     return meta
+
+def spawn_process(func, args=None, kwargs=None):
+    args = args or []
+    kwargs = kwargs or {}
+    p = multiprocessing.Process(target=func, args=args, kwargs=kwargs, daemon=True)
+    p.start()
+    while not p.pid:
+        time.sleep(0.01)
+    return p
