@@ -10,7 +10,7 @@ import gevent
 
 from lib import operators
 from lib.net import Reactor, ConnectionTimeout
-from lib.util import *
+from lib.util import elapsed, get_facts, log, log_error
 
 PING_INTERVAL = 10.0
 FACTS_INTERVAL = 60.0
@@ -197,5 +197,5 @@ class SaltyClient(Reactor):
                 if msg['type'] != 'pong':
                     return msg
                 log(f'Working {int(time.time()-start):} seconds ...', end='\r')
-            except ConnectionTimeout as e:
+            except ConnectionTimeout:
                 self.send_msg(sock, {'type': 'ping'})

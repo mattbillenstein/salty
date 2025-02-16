@@ -1,5 +1,4 @@
 import struct
-import time
 import uuid
 from queue import Queue
 
@@ -7,10 +6,11 @@ import gevent
 import msgpack
 from gevent.event import AsyncResult
 
-from .util import log, log_error
+from .util import log_error
 
 class ConnectionTimeout(Exception):
     pass
+
 CONNECTION_TIMEOUT = ConnectionTimeout('Connection timeout')
 SOCKET_TIMEOUT = 30
 

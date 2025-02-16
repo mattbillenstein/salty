@@ -12,8 +12,8 @@ hosts = {
 
 for _i in range(10):
     hosts['local'][f'server{_i}'] = {
-      'env': 'dev',
-      'roles': ['role1', 'supervisord'],
+        'env': 'dev',
+        'roles': ['role1', 'supervisord'],
     }
 
 # ENVS
@@ -26,8 +26,8 @@ envs = {
     'dev': {
         'the': 'rain in spain',
 
-    # encrypted secrets can be put here
-    #    'secret': 'NACL[ ... ../cryto.py es "some secret" ]'
+        # encrypted secrets can be put here
+        # 'secret': 'NACL[ ... ../cryto.py es "some secret" ]'
         'secret': 'NACL[TGE10k69Sb-EA-N6hWCIkeJpTfCkxpYePFWFy6EeWHVkBCrYJg7nUrSiiXaWg_UM]',
     },
 }

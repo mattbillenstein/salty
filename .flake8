@@ -1,0 +1,9 @@
+# E203 whitespace before ':'
+# E302 expected 2 blank lines, found 1
+# E402 module level import not at top of file
+# W503 line break before binary operator
+# E731 do not assign a lambda expression
+[flake8]
+ignore = E203,E302,E305,E402,W503,E731,W605
+exclude = .git,node_modules,ops/salty,adhoc
+max-line-length = 250

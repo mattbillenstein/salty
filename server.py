@@ -12,7 +12,7 @@ import gevent.server
 
 from lib import crypto, operators
 from lib.net import Reactor
-from lib.util import *
+from lib.util import elapsed, get_crypto_pass, get_meta, hash_data, log, log_error
 
 class SaltyServer(gevent.server.StreamServer, Reactor):
     def __init__(self, *args, **kwargs):
@@ -266,7 +266,7 @@ class SaltyServer(gevent.server.StreamServer, Reactor):
 
             gevent.wait(greenlets)
 
-        except:
+        except Exception:
             log_error('Exception handling msg in handle_apply:', msg)
             tb = traceback.format_exc().strip()
             print(tb)

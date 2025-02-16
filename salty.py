@@ -10,7 +10,7 @@ import time
 
 import gevent
 
-from lib.util import *
+from lib.util import elapsed, get_crypto_pass, get_facts, get_meta, hash_data, log, log_error, pprint, print_error
 from client import SaltyClient
 from server import SaltyServer
 
