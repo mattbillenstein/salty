@@ -5,5 +5,5 @@
 # E731 do not assign a lambda expression
 [flake8]
 ignore = E203,E302,E305,E402,W503,E731,W605
-exclude = .git,node_modules,ops/salty,adhoc
+exclude = .git,.venv,example
 max-line-length = 250

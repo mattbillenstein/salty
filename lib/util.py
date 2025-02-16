@@ -4,10 +4,8 @@ import sys
 import time
 import os.path
 
-from .compat import get_facts
+from .compat import get_facts # noqa
 from . import crypto
-
-__all__ = ['elapsed', 'get_crypto_pass', 'get_facts', 'get_meta', 'hash_data', 'hash_file', 'log', 'log_error', 'pprint', 'print_error']
 
 def log(*args, **kwargs):
     t = time.time()
