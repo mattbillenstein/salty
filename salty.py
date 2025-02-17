@@ -3,6 +3,7 @@
 import gevent.monkey
 gevent.monkey.patch_all()
 
+import multiprocessing
 import os
 import re
 import sys
@@ -194,4 +195,5 @@ def main(*args):
     return 0
 
 if __name__ == '__main__':
+    multiprocessing.set_start_method('forkserver')
     sys.exit(main(*sys.argv[1:]))

@@ -37,6 +37,7 @@ class MsgMixin:
     # whole messages which are just dicts {'type': '<type>', ...payload...}
 
     def wrap_socket(self, sock, server_side=False):
+        #return sock
         proto = ssl.PROTOCOL_TLS_CLIENT
         if server_side:
             proto = ssl.PROTOCOL_TLS_SERVER
@@ -50,7 +51,10 @@ class MsgMixin:
         return ctx.wrap_socket(sock, server_side=server_side)
 
     def send_msg(self, sock, msg):
-        assert not isinstance(sock, Queue)
+        if isinstance(sock, Queue):
+            sock.put(msg)
+            return
+
         # encode messages as 4-bytes message size (up to 4GiB) followed by a
         # msgpack blob
         data = msgpack.packb(msg)
@@ -77,14 +81,20 @@ class MsgMixin:
         # message framing...
         while 1:
             msg = q.get()
-            with gevent.Timeout(SOCKET_TIMEOUT, CONNECTION_TIMEOUT):
-                self.send_msg(sock, msg)
+            if isinstance(sock, socket.socket):
+                with gevent.Timeout(SOCKET_TIMEOUT, CONNECTION_TIMEOUT):
+                    self.send_msg(sock, msg)
+            else:
+                sock.put(msg)
 
     def _reader(self, sock, q):
         # read from sock and put to q in a separate greenlet
         while 1:
-            with gevent.Timeout(SOCKET_TIMEOUT, CONNECTION_TIMEOUT):
-                msg = self.recv_msg(sock)
+            if isinstance(sock, socket.socket):
+                with gevent.Timeout(SOCKET_TIMEOUT, CONNECTION_TIMEOUT):
+                    msg = self.recv_msg(sock)
+            else:
+                msg = sock.get()
             q.put(msg)
 
     def do_rpc(self, sock, msg):

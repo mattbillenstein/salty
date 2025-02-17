@@ -11,12 +11,24 @@ from queue import Queue
 
 import gevent
 import gevent.server
+#import gipc
+import msgpack
 
 from lib import crypto, operators
 from lib.net import MsgMixin
-from lib.util import elapsed, get_crypto_pass, get_meta, hash_data, log, log_error, spawn_process
+from lib.util import elapsed, get_crypto_pass, get_meta, hash_data, log, log_error
 
-print('server', os.getpid())
+
+def client_proc(sock_fd, server_q, keyroot, fileroot):
+    print('client_proc start', os.getpid())
+    server_q = socket.fromfd(sock_fd, socket.AF_INET, socket.SOCK_STREAM)
+
+    while 1:
+        server_q.send(b'hi there ' + str(time.time()).encode('utf8'))
+
+    server_conn.send({'hi': 'there'})
+    ClientProc(sock, server_q, keyroot, fileroot).serve_forever()
+
 
 class SaltyServer(gevent.server.StreamServer, MsgMixin):
     def __init__(self, *args, **kwargs):
@@ -28,61 +40,71 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
         self.keyroot = kwargs.pop('keyroot', os.getcwd())
         self.crypto_pass = get_crypto_pass(self.keyroot)
 
-        addr = args[0]
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(addr)
-        sock.listen(100)
-        sock.set_inheritable(False)
+        print('Server init', args, kwargs)
 
-        super().__init__(sock, *args[1:], **kwargs)
+        super().__init__(*args, **kwargs)
 
-    def handle(self, client_sock, addr):
+    def handle(self, sock, addr):
         log(f'Connection established {addr[0]}:{addr[1]}')
 
-        sock, server_sock = socket.socketpair()
+        #client_q, server_q = gipc.pipe(duplex=True)
+        #client_q, server_q = socket.socketpair()
 
         # create subprocess, args here are pickled to the other process
-        print('Spawn in', os.getpid())
-        spawn_process(client_proc, args=(client_sock, server_sock, self.keyroot, self.fileroot, self.socket.fileno()))
-        print('after spawn', os.getpid())
+        #p = gipc.start_process(target=client_proc, args=(sock.fileno(), server_q.fileno(), self.keyroot, self.fileroot), daemon=True)
 
-        # Accepted connection now handled by the sub-process, close
-        server_sock.close()
-        client_sock.close()
+        #import multiprocessing
+        #client_q, server_q = multiprocessing.Pipe(True)
+        #p = multiprocessing.Process(target=client_proc, args=(sock.fileno(), server_q, self.keyroot, self.fileroot), daemon=True)
+        #p.start()
+
+        client_q, server_q = socket.socketpair()
+        path = os.path.abspath(os.path.dirname(__file__))
+        exe = os.path.join(path, 'client_proc.py')
+        args = [str(sock.fileno()), str(server_q.fileno()), self.keyroot, self.fileroot]
+        p = subprocess.Popen([exe] + args, pass_fds=(sock.fileno(), server_q.fileno()))
+
+        while not p.pid:
+            time.sleep(0.01)
+
+        print(p, p.pid, os.getpid())
+
+        #sock.close()
 
         client_id = None
-        q = Queue()
-        g = gevent.spawn(self._writer, q, sock)
+        #client_q = Queue()
+        #g = gevent.spawn(self._writer, client_q, sock)
 
         try:
             while 1:
                 try:
                     # if writer dead, break and eventually close the socket...
-                    if g.dead:
-                        break
+                    #if g.dead:
+                    #    break
 
-                    msg = self.recv_msg(sock)
+                    msg = self.recv_msg(client_q)
+                    print('Server got', msg)
                     if msg['type'] == 'identify':
                         client_id = msg['id']
                         log(f'id:{client_id} facts:{msg["facts"]}')
-                        self.clients[client_id] = q
+                        self.clients[client_id] = client_q
                         self.facts[client_id] = msg['facts']
                     else:
-                        self.handle_msg(msg, q)
-                except OSError:
-                    log(f'Connection lost {addr[0]}:{addr[1]}')
+                        self.handle_msg(msg, client_q)
+                except OSError as e:
+                    log(f'Connection lost {addr[0]}:{addr[1]} {e}')
                     break
         finally:
-            if self.clients.get(client_id) is q:
+            if self.clients.get(client_id) is client_q:
                 self.clients.pop(client_id)
-            g.kill()
-            sock.close()
+            p.kill()
+            #g.kill()
+            #client_q.close()
 
     def handle_ping(self, msg, q):
         if facts := msg.get('facts'):
             self.facts[msg['id']] = facts
-        q.put({'type': 'pong'})
+        self.send_msg(q, {'type': 'pong'})
 
     def handle_hosts(self, msg, q):
         meta = get_meta(self.fileroot, self.crypto_pass)
@@ -119,6 +141,7 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
         return hosts
 
     def handle_apply(self, msg, q):
+        print('handle_apply', msg)
         # Apply roles to all connected hosts and return status on everything
         # that was run. This does a scatter/gather on each host for each role
         # executed in order.
@@ -214,28 +237,23 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
         self.send_msg(q, msg_result)
 
 
-def client_proc(client_sock, server_sock, keyroot, fileroot, server_listener_fd):
-    print('client', os.getpid())
-    print(client_sock.fileno(), server_sock.fileno(), server_listener_fd)
-    #print('closing', server_listener_fd)
-    os.close(server_listener_fd)
-    ClientProc(client_sock, server_sock, keyroot, fileroot).serve_forever()
-
-
 class ClientProc(MsgMixin):
 
     # Do heavy lifting for a client connection in another process, proxy
     # unhandled messages to the actual server.
 
     def __init__(self, client_sock, server_sock, keyroot, fileroot):
+        self.futures = {}
         self.keyroot = keyroot
         self.fileroot = fileroot
         self.client_sock = self.wrap_socket(client_sock, server_side=True)
         self.server_sock = server_sock
 
     def serve_forever(self):
+        log('ClientProc serve_forever')
         client_q = Queue()
         server_q = Queue()
+        self.server_q = server_q
 
         # reader server_sock -> client_q
         s2c = gevent.spawn(self._reader, self.server_sock, client_q)
@@ -248,16 +266,20 @@ class ClientProc(MsgMixin):
 
         threads = (s2c, c2c, s2s)
 
+        log('ClientProc threads', threads)
+
         # and in this thread,
-        # reader client_sock -> client_q or server_q
+        # reader client_sock -> client_q or server_sock
 
         try:
             while 1:
                 try:
                     if any(_.dead for _ in threads):
+                        print('read/writer dead')
                         break
 
                     msg = self.recv_msg(self.client_sock)
+                    print('ClientProc got', msg)
                     method = getattr(self, 'handle_' + msg['type'], None)
                     if method:
                         gevent.spawn(method, msg, client_q)
@@ -266,11 +288,25 @@ class ClientProc(MsgMixin):
                 except OSError:
                     addr = self.client_sock.getpeername()
                     log(f'Connection lost {addr[0]}:{addr[1]}')
+                    print(traceback.format_exc())
+                    break
+                except OSError as e:
+                    log(f'OSError: {e}')
+                    print(traceback.format_exc())
                     break
         finally:
             [_.kill() for _ in threads]
             self.client_sock.close()
             self.server_sock.close()
+
+    def handle_future(self, msg, q):
+        # Pull AsyncResult from registry and set it
+        ar = self.futures.pop(msg['future_id'], None)
+        if ar:
+            ar.set(msg)
+        else:
+            # proxy to server
+            self.server_q.put(msg)
 
     def handle_get_file(self, msg, q):
         # serve files from <fileroot>/files
