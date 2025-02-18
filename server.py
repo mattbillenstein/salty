@@ -67,12 +67,20 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
         # process as before.
 
         client_sock, server_sock = socket.socketpair()
+
+        if 'salty.py' in sys.argv[0]:
+            # use the same executable so we land in the same venv
+            exe = [sys.executable, sys.argv[0]]
+        else:
+            exe = [sys.argv[0]]
+
         args = [
-            sys.argv[0], 'client-proc',
+            'client-proc',
             f'--keyroot={self.keyroot}', f'--fileroot={self.fileroot}',
             f'--client-fd={sock.fileno()}', f'--server-fd={server_sock.fileno()}',
         ]
-        p = subprocess.Popen(args, pass_fds=(sock.fileno(), server_sock.fileno()))
+        log(f'Running: {exe + args}')
+        p = subprocess.Popen(exe + args, pass_fds=(sock.fileno(), server_sock.fileno()))
 
         # Close fds handled by the client proc
         sock.close()
