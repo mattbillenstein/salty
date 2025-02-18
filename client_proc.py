@@ -41,8 +41,9 @@ class ClientProc(MsgMixin):
 
     def serve_forever(self):
         addr = self.client_sock.getpeername()
+        pid = os.getpid()
 
-        log(f'ClientProc serve_forever {addr}')
+        log(f'ClientProc serve_forever {addr[0]}:{addr[1]} pid:{pid}')
 
         # reader server_sock -> client_q
         s2c = gevent.spawn(self._reader, self.server_sock, self.client_q)
@@ -55,8 +56,6 @@ class ClientProc(MsgMixin):
 
         threads = (s2c, c2c, s2s)
 
-        log('ClientProc threads', threads)
-
         # and in this thread,
         # reader client_sock -> client_q or server_sock
 
@@ -64,11 +63,12 @@ class ClientProc(MsgMixin):
             while 1:
                 try:
                     if any(_.dead for _ in threads):
-                        log_error('read/writer dead')
                         break
 
                     msg = self.recv_msg(self.client_sock)
-                    log('ClientProc got', msg)
+                    if not msg:
+                        break
+
                     method = getattr(self, 'handle_' + msg['type'], None)
                     if method:
                         # if we have a handler for this type, run it
@@ -76,11 +76,13 @@ class ClientProc(MsgMixin):
                     else:
                         # otherwise, let the server handle it
                         self.server_q.put(msg)
+
                 except OSError as e:
-                    log(f'Connection lost {addr[0]}:{addr[1]} {e}')
-                    log(traceback.format_exc())
+                    log_error(f'Connection lost {addr[0]}:{addr[1]} pid:{pid} exc:{e}')
                     break
         finally:
+            log(f'Connection lost {addr[0]}:{addr[1]} pid:{pid}')
+
             [_.kill() for _ in threads if not _.dead]
             self.client_sock.close()
             self.server_sock.close()

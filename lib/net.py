@@ -25,7 +25,8 @@ def recvall(sock, size):
     while 1:
         newdata = sock.recv(size - len(data))
         if not newdata:
-            raise ConnectionError('Socket dead')
+            # Connection lost, return empty data
+            return b''
         data += newdata
         if len(data) == size:
             break
@@ -59,6 +60,9 @@ class MsgMixin:
     def recv_msg(self, sock, timeout=SOCKET_TIMEOUT):
         with gevent.Timeout(timeout, CONNECTION_TIMEOUT):
             data = recvall(sock, 4)
+            if not data:
+                return None
+
             size = struct.unpack('!I', data)[0]
             if size > 500_000_000:
                 # FIXME, this is only really a limit for big file copies,
@@ -68,6 +72,9 @@ class MsgMixin:
                 raise ConnectionError('Message too big')
 
             data = recvall(sock, size)
+            if not data:
+                return None
+
             return msgpack.unpackb(data)
 
     def _writer(self, q, sock):
@@ -75,6 +82,8 @@ class MsgMixin:
         # message framing...
         while 1:
             msg = q.get()
+            if not msg:
+                return
             if isinstance(sock, socket.socket):
                 with gevent.Timeout(SOCKET_TIMEOUT, CONNECTION_TIMEOUT):
                     self.send_msg(sock, msg)
@@ -89,7 +98,12 @@ class MsgMixin:
                     msg = self.recv_msg(sock)
             else:
                 msg = sock.get()
+
             q.put(msg)
+
+            if not msg:
+                # exit after put so we wake any readers who can also exit
+                return
 
     def do_rpc(self, msg, q):
         # Register a future using AsyncResult, send the request, and block

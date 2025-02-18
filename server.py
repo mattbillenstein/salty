@@ -79,8 +79,10 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
             f'--keyroot={self.keyroot}', f'--fileroot={self.fileroot}',
             f'--client-fd={sock.fileno()}', f'--server-fd={server_sock.fileno()}',
         ]
-        log(f'Running: {exe + args}')
+        log(f'Running client-proc {addr[0]}:{addr[1]} "{" ".join(exe + args)}"')
         p = subprocess.Popen(exe + args, pass_fds=(sock.fileno(), server_sock.fileno()))
+        pid = p.pid
+        log(f'Launched client-proc {addr[0]}:{addr[1]} pid:{pid}')
 
         # Close fds handled by the client proc
         sock.close()
@@ -98,7 +100,9 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
                         break
 
                     msg = self.recv_msg(client_sock)
-                    log('Server got', msg)
+                    if not msg:
+                        break
+
                     if msg['type'] == 'identify':
                         client_id = msg['id']
                         log(f'id:{client_id} facts:{msg["facts"]}')
@@ -106,10 +110,13 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
                         self.facts[client_id] = msg['facts']
                     else:
                         self.handle_msg(msg, client_q)
+
                 except OSError as e:
-                    log(f'Connection lost {addr[0]}:{addr[1]} {e}')
+                    log_error(f'Connection lost {addr[0]}:{addr[1]} pid:{pid} exc:{e}')
                     break
         finally:
+            log(f'Connection lost {addr[0]}:{addr[1]} pid:{pid} {client_id}')
+
             if self.clients.get(client_id) is client_q:
                 self.clients.pop(client_id)
 

@@ -131,6 +131,7 @@ class SaltyClient(MsgMixin):
         # create two threads; one that writes messages back to the socket from
         # a Queue, and another that pings the server every N seconds
         log(f'Connection established {addr[0]}:{addr[1]}')
+
         q = Queue()
         g = gevent.spawn(self._writer, q, sock)
 
@@ -146,12 +147,15 @@ class SaltyClient(MsgMixin):
                         break
 
                     msg = self.recv_msg(sock)
-                    log('Client got', msg)
+                    if not msg:
+                        break
+
                     self.handle_msg(msg, q)
-                except OSError:
-                    log(f'Connection lost {addr[0]}:{addr[1]}')
+                except OSError as e:
+                    log_error(f'Connection lost {addr[0]}:{addr[1]} exc:{e}')
                     break
         finally:
+            log(f'Connection lost {addr[0]}:{addr[1]}')
             g.kill()
             p.kill()
             sock.close()
@@ -187,7 +191,9 @@ class SaltyClient(MsgMixin):
         while 1:
             try:
                 msg = self.recv_msg(sock, timeout=5)
-                log('CLI got', msg)
+                if not msg:
+                    log_error('Server unexpectedly disconnected...')
+                    break
                 if msg['type'] != 'pong':
                     return msg
                 log(f'Working {int(time.time()-start):} seconds ...', end='\r')
