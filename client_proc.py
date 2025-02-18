@@ -10,7 +10,7 @@ import gevent
 
 from lib import crypto, operators
 from lib.net import MsgMixin
-from lib.util import elapsed, hash_data, log, log_error
+from lib.util import elapsed, get_crypto_pass, hash_data, log, log_error
 
 class ClientProc(MsgMixin):
 
@@ -21,6 +21,8 @@ class ClientProc(MsgMixin):
         self.futures = {}
         self.keyroot = keyroot
         self.fileroot = fileroot
+
+        self.crypto_pass = get_crypto_pass(self.keyroot)
 
         # We are invoked via subprocess.run taking fds from the cli - turn them
         # into sockets...
