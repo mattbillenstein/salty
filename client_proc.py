@@ -61,11 +61,11 @@ class ClientProc(MsgMixin):
             while 1:
                 try:
                     if any(_.dead for _ in threads):
-                        print('read/writer dead')
+                        log_error('read/writer dead')
                         break
 
                     msg = self.recv_msg(self.client_sock)
-                    print('ClientProc got', msg)
+                    log('ClientProc got', msg)
                     method = getattr(self, 'handle_' + msg['type'], None)
                     if method:
                         # if we have a handler for this type, run it
@@ -75,7 +75,7 @@ class ClientProc(MsgMixin):
                         self.server_q.put(msg)
                 except OSError as e:
                     log(f'Connection lost {addr[0]}:{addr[1]} {e}')
-                    print(traceback.format_exc())
+                    log(traceback.format_exc())
                     break
         finally:
             [_.kill() for _ in threads if not _.dead]
@@ -118,7 +118,7 @@ class ClientProc(MsgMixin):
         except Exception:
             log_error('Exception handling msg in handle_get_file:', msg)
             tb = traceback.format_exc().strip()
-            print(tb)
+            log(tb)
             msg['error'] = tb
 
         q.put(msg)
@@ -135,7 +135,7 @@ class ClientProc(MsgMixin):
         except Exception:
             log_error('Exception handling msg in handle_syncdir_get_file:', msg)
             tb = traceback.format_exc().strip()
-            print(tb)
+            log(tb)
             msg['error'] = tb
 
         q.put(msg)
@@ -149,7 +149,7 @@ class ClientProc(MsgMixin):
         except Exception:
             log_error('Exception handling msg in handle_syncdir_scandir:', msg)
             tb = traceback.format_exc().strip()
-            print(tb)
+            log(tb)
             msg['error'] = tb
 
         q.put(msg)
@@ -169,7 +169,7 @@ class ClientProc(MsgMixin):
         except Exception:
             log_error('Exception handling msg in handle_server_shell:', msg)
             tb = traceback.format_exc().strip()
-            print(tb)
+            log(tb)
             msg['error'] = tb
 
         q.put(msg)

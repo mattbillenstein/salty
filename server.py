@@ -26,8 +26,6 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
         self.keyroot = kwargs.pop('keyroot', os.getcwd())
         self.crypto_pass = get_crypto_pass(self.keyroot)
 
-        print('Server init', args, kwargs)
-
         super().__init__(*args, **kwargs)
 
     def handle(self, sock, addr):
@@ -75,7 +73,7 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
                         break
 
                     msg = self.recv_msg(client_sock)
-                    print('Server got', msg)
+                    log('Server got', msg)
                     if msg['type'] == 'identify':
                         client_id = msg['id']
                         log(f'id:{client_id} facts:{msg["facts"]}')
@@ -137,7 +135,6 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
         return hosts
 
     def handle_apply(self, msg, q):
-        print('handle_apply', msg)
         # Apply roles to all connected hosts and return status on everything
         # that was run. This does a scatter/gather on each host for each role
         # executed in order.
@@ -229,7 +226,7 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
         except Exception:
             log_error('Exception handling msg in handle_apply:', msg)
             tb = traceback.format_exc().strip()
-            print(tb)
+            log(tb)
             msg_result['error'] = tb
 
         msg_result['elapsed'] = elapsed(start)

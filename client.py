@@ -147,7 +147,7 @@ class SaltyClient(MsgMixin):
                         break
 
                     msg = self.recv_msg(sock)
-                    print('Client got', msg)
+                    log('Client got', msg)
                     self.handle_msg(msg, q)
                 except OSError:
                     log(f'Connection lost {addr[0]}:{addr[1]}')
@@ -188,7 +188,7 @@ class SaltyClient(MsgMixin):
         while 1:
             try:
                 msg = self.recv_msg(sock, timeout=5)
-                print('CLI got', msg)
+                log('CLI got', msg)
                 if msg['type'] != 'pong':
                     return msg
                 log(f'Working {int(time.time()-start):} seconds ...', end='\r')
