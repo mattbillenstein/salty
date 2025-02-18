@@ -12,7 +12,7 @@ from gevent.event import AsyncResult
 
 from .util import log_error
 
-class ConnectionTimeout(Exception):
+class ConnectionTimeout(ConnectionError):
     pass
 
 CONNECTION_TIMEOUT = ConnectionTimeout('Connection timeout')
@@ -37,7 +37,6 @@ class MsgMixin:
     # whole messages which are just dicts {'type': '<type>', ...payload...}
 
     def wrap_socket(self, sock, server_side=False):
-        #return sock
         proto = ssl.PROTOCOL_TLS_CLIENT
         if server_side:
             proto = ssl.PROTOCOL_TLS_SERVER
@@ -51,10 +50,6 @@ class MsgMixin:
         return ctx.wrap_socket(sock, server_side=server_side)
 
     def send_msg(self, sock, msg):
-        if isinstance(sock, Queue):
-            sock.put(msg)
-            return
-
         # encode messages as 4-bytes message size (up to 4GiB) followed by a
         # msgpack blob
         data = msgpack.packb(msg)
@@ -77,7 +72,7 @@ class MsgMixin:
             return msgpack.unpackb(data)
 
     def _writer(self, q, sock):
-        # read from q and write to sock in a separate greenlet - mainly for
+        # get from q and write to sock in a separate greenlet - mainly for
         # message framing...
         while 1:
             msg = q.get()
@@ -97,12 +92,12 @@ class MsgMixin:
                 msg = sock.get()
             q.put(msg)
 
-    def do_rpc(self, sock, msg):
+    def do_rpc(self, msg, q):
         # Register a future using AsyncResult, send the request, and block
         # until it's set
         msg['future_id'] = id = str(uuid.uuid4())
         self.futures[id] = ar = AsyncResult()
-        self.send_msg(sock, msg)
+        q.put(msg)
         return ar.get()
 
     def handle_future(self, msg, q):
@@ -110,6 +105,8 @@ class MsgMixin:
         ar = self.futures.pop(msg['future_id'], None)
         if ar:
             ar.set(msg)
+        else:
+            log_error(f'Unhandled future: {msg["future_id"]}')
 
     def handle_msg(self, msg, q):
         method = getattr(self, 'handle_' + msg['type'], None)

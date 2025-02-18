@@ -3,7 +3,6 @@
 import gevent.monkey
 gevent.monkey.patch_all()
 
-import multiprocessing
 import os
 import re
 import sys
@@ -13,6 +12,7 @@ import gevent
 
 from lib.util import elapsed, get_crypto_pass, get_facts, get_meta, hash_data, log, log_error, pprint, print_error
 from client import SaltyClient
+from client_proc import ClientProc
 from server import SaltyServer
 
 
@@ -32,6 +32,9 @@ def parse_args(args):
             verbose = arg.count('v')
         elif arg.startswith('--'):
             k, v = arg[2:].split('=', 1)
+            k = k.replace('-', '_')
+            if re.match('^[0-9]+$', v):
+                v = int(v)
             opts[k] = v
 
     # filter run args
@@ -152,7 +155,7 @@ def cli(hostport, args, opts, verbose, bootstrap=False):
 def main(*args):
     mode, hostport, args, opts, verbose = parse_args(args)
 
-    modes = ('facts', 'meta', 'genkey', 'server', 'client', 'cli', 'bootstrap')
+    modes = ('facts', 'meta', 'genkey', 'server', 'client', 'client-proc', 'cli', 'bootstrap')
     if mode == 'help' or mode not in modes:
         print(f"Usage: ./salty.py ({' | '.join(modes)}) [args]")
 
@@ -183,6 +186,12 @@ def main(*args):
         except KeyboardInterrupt:
             log('Exit.')
 
+    elif mode == 'client-proc':
+        try:
+            ClientProc(**opts).serve_forever()
+        except KeyboardInterrupt:
+            log('Exit.')
+
     elif mode == 'client':
         try:
             SaltyClient(hostport, **opts).serve_forever()
@@ -195,5 +204,4 @@ def main(*args):
     return 0
 
 if __name__ == '__main__':
-    multiprocessing.set_start_method('forkserver')
     sys.exit(main(*sys.argv[1:]))

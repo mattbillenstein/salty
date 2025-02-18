@@ -1,6 +1,5 @@
 flake8
 gevent
-geventmp
 mako
 msgpack
 pip-tools

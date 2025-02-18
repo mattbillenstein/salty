@@ -11,23 +11,9 @@ from queue import Queue
 
 import gevent
 import gevent.server
-#import gipc
-import msgpack
 
-from lib import crypto, operators
 from lib.net import MsgMixin
-from lib.util import elapsed, get_crypto_pass, get_meta, hash_data, log, log_error
-
-
-def client_proc(sock_fd, server_q, keyroot, fileroot):
-    print('client_proc start', os.getpid())
-    server_q = socket.fromfd(sock_fd, socket.AF_INET, socket.SOCK_STREAM)
-
-    while 1:
-        server_q.send(b'hi there ' + str(time.time()).encode('utf8'))
-
-    server_conn.send({'hi': 'there'})
-    ClientProc(sock, server_q, keyroot, fileroot).serve_forever()
+from lib.util import elapsed, get_crypto_pass, get_meta, log, log_error
 
 
 class SaltyServer(gevent.server.StreamServer, MsgMixin):
@@ -47,42 +33,48 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
     def handle(self, sock, addr):
         log(f'Connection established {addr[0]}:{addr[1]}')
 
-        #client_q, server_q = gipc.pipe(duplex=True)
-        #client_q, server_q = socket.socketpair()
+        # gipc, geventmp, and patched multiprocessing are all broken in various
+        # ways.
+        #
+        # All we want is to get a new process with a valid handle to
+        # the client socket, a reliable way to communicate with it, and with a
+        # new gevent loop...
+        # 
+        # The simplest thing seems to be to create a socket pair and pass one
+        # end of that and the client socket via:
+        #
+        #    subprocess.run([sys.argv[0], ...], pass_fds=(sock, sock2))
+        #
+        # Under the hood, this does fork / exec closing everything we're not
+        # interested in in-between; and the exec replaces the process, so we
+        # discard the event loop as well.
+        #
+        # This probably isn't that fast compared to threads or just fork(), but
+        # for long-lived connections (days, weeks) should be more than fine.
 
-        # create subprocess, args here are pickled to the other process
-        #p = gipc.start_process(target=client_proc, args=(sock.fileno(), server_q.fileno(), self.keyroot, self.fileroot), daemon=True)
+        client_sock, server_sock = socket.socketpair()
+        args = [sys.argv[0], 'client-proc',
+            f'--client-fd={sock.fileno()}', f'--server-fd={server_sock.fileno()}',
+            f'--keyroot={self.keyroot}', f'--fileroot={self.fileroot}',
+        ]
+        p = subprocess.Popen(args, pass_fds=(sock.fileno(), server_sock.fileno()))
 
-        #import multiprocessing
-        #client_q, server_q = multiprocessing.Pipe(True)
-        #p = multiprocessing.Process(target=client_proc, args=(sock.fileno(), server_q, self.keyroot, self.fileroot), daemon=True)
-        #p.start()
-
-        client_q, server_q = socket.socketpair()
-        path = os.path.abspath(os.path.dirname(__file__))
-        exe = os.path.join(path, 'client_proc.py')
-        args = [str(sock.fileno()), str(server_q.fileno()), self.keyroot, self.fileroot]
-        p = subprocess.Popen([exe] + args, pass_fds=(sock.fileno(), server_q.fileno()))
-
-        while not p.pid:
-            time.sleep(0.01)
-
-        print(p, p.pid, os.getpid())
-
-        #sock.close()
+        # Close fds handled by the client proc
+        sock.close()
+        server_sock.close()
 
         client_id = None
-        #client_q = Queue()
-        #g = gevent.spawn(self._writer, client_q, sock)
+        client_q = Queue()
+        g = gevent.spawn(self._writer, client_q, client_sock)
 
         try:
             while 1:
                 try:
-                    # if writer dead, break and eventually close the socket...
-                    #if g.dead:
-                    #    break
+                    # client proc or writer dead, break and exit
+                    if g.dead or p.poll() is not None:
+                        break
 
-                    msg = self.recv_msg(client_q)
+                    msg = self.recv_msg(client_sock)
                     print('Server got', msg)
                     if msg['type'] == 'identify':
                         client_id = msg['id']
@@ -97,20 +89,24 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
         finally:
             if self.clients.get(client_id) is client_q:
                 self.clients.pop(client_id)
-            p.kill()
-            #g.kill()
-            #client_q.close()
+
+            if p.poll() is None:
+                p.kill()
+            if not g.dead:
+                g.kill()
+
+            client_sock.close()
 
     def handle_ping(self, msg, q):
         if facts := msg.get('facts'):
             self.facts[msg['id']] = facts
-        self.send_msg(q, {'type': 'pong'})
+        q.put({'type': 'pong'})
 
     def handle_hosts(self, msg, q):
         meta = get_meta(self.fileroot, self.crypto_pass)
         hosts = self.get_hosts(meta)
         msg['hosts'] = {k: v for k, v in hosts.items() if v['facts']}
-        self.send_msg(q, msg)
+        q.put(msg)
 
     def get_hosts(self, meta):
         # Return host metadata / facts for all available hosts
@@ -208,17 +204,20 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
                     ctx = {'id': id, 'role': role, 'hosts': hosts, 'me': hosts[id], 'bootstrap': False}
                     ctx.update(context)
                     msg = {'type': 'run', 'content': content, 'context': ctx}
-                    results[id][role] = (q2, msg)
+                    results[id][role] = (msg, q2)
 
             # scatter by host, then collect - roles must be run sequentially
             def dispatch(host_roles):
                 for role, tup in list(host_roles.items()):
+                    # if dict, either host or role was skipped and a stub
+                    # result returned... Otherwise, do rpc.
                     if not isinstance(tup, dict):
-                        x = tup[-1]['context']
+                        msg, q = tup
+                        ctx = msg['context']
                         t = time.time()
-                        host_roles[role] = m = self.do_rpc(*tup)['result']
+                        host_roles[role] = m = self.do_rpc(msg, q)['result']
                         rc = sum(_['rc'] for _ in m['results'])
-                        log('RPC', x['id'], x['role'], rc, f'{elapsed(t):.6f}')
+                        log('RPC', ctx['id'], ctx['role'], rc, f'{elapsed(t):.6f}')
 
             greenlets = []
             for id, host_roles in results.items():
@@ -234,158 +233,4 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
             msg_result['error'] = tb
 
         msg_result['elapsed'] = elapsed(start)
-        self.send_msg(q, msg_result)
-
-
-class ClientProc(MsgMixin):
-
-    # Do heavy lifting for a client connection in another process, proxy
-    # unhandled messages to the actual server.
-
-    def __init__(self, client_sock, server_sock, keyroot, fileroot):
-        self.futures = {}
-        self.keyroot = keyroot
-        self.fileroot = fileroot
-        self.client_sock = self.wrap_socket(client_sock, server_side=True)
-        self.server_sock = server_sock
-
-    def serve_forever(self):
-        log('ClientProc serve_forever')
-        client_q = Queue()
-        server_q = Queue()
-        self.server_q = server_q
-
-        # reader server_sock -> client_q
-        s2c = gevent.spawn(self._reader, self.server_sock, client_q)
-
-        # writer client_q -> client_sock
-        c2c = gevent.spawn(self._writer, client_q, self.client_sock)
-
-        # writer server_q -> server_sock
-        s2s = gevent.spawn(self._writer, server_q, self.server_sock)
-
-        threads = (s2c, c2c, s2s)
-
-        log('ClientProc threads', threads)
-
-        # and in this thread,
-        # reader client_sock -> client_q or server_sock
-
-        try:
-            while 1:
-                try:
-                    if any(_.dead for _ in threads):
-                        print('read/writer dead')
-                        break
-
-                    msg = self.recv_msg(self.client_sock)
-                    print('ClientProc got', msg)
-                    method = getattr(self, 'handle_' + msg['type'], None)
-                    if method:
-                        gevent.spawn(method, msg, client_q)
-                    else:
-                        server_q.put(msg)
-                except OSError:
-                    addr = self.client_sock.getpeername()
-                    log(f'Connection lost {addr[0]}:{addr[1]}')
-                    print(traceback.format_exc())
-                    break
-                except OSError as e:
-                    log(f'OSError: {e}')
-                    print(traceback.format_exc())
-                    break
-        finally:
-            [_.kill() for _ in threads]
-            self.client_sock.close()
-            self.server_sock.close()
-
-    def handle_future(self, msg, q):
-        # Pull AsyncResult from registry and set it
-        ar = self.futures.pop(msg['future_id'], None)
-        if ar:
-            ar.set(msg)
-        else:
-            # proxy to server
-            self.server_q.put(msg)
-
-    def handle_get_file(self, msg, q):
-        # serve files from <fileroot>/files
-        path = os.path.join(self.fileroot, 'files', msg['path'])
-
-        # automatically decrypt files ending with .enc
-        if os.path.exists(path + '.enc'):
-            path += '.enc'
-
-        msg['type'] = 'future'
-
-        try:
-            with open(path, 'rb') as f:
-                data = f.read()
-
-            if path.endswith('.enc'):
-                data = crypto.decrypt(data, self.crypto_pass)
-
-            hash = hash_data(data)
-            if msg.get('hash') != hash:
-                msg['data'] = data
-                msg['hash'] = hash
-
-            msg['mode'] = os.stat(path).st_mode & 0o777
-        except Exception:
-            log_error('Exception handling msg in handle_get_file:', msg)
-            tb = traceback.format_exc().strip()
-            print(tb)
-            msg['error'] = tb
-
-        self.send_msg(q, msg)
-
-    def handle_syncdir_get_file(self, msg, q):
-        # syncdir get_file uses absolute paths and does no decryption - this is
-        # part of the interface for a home-grown rsync
-        msg['type'] = 'future'
-
-        try:
-            with open(msg['path'], 'rb') as f:
-                data = f.read()
-            msg['data'] = data
-        except Exception:
-            log_error('Exception handling msg in handle_syncdir_get_file:', msg)
-            tb = traceback.format_exc().strip()
-            print(tb)
-            msg['error'] = tb
-
-        self.send_msg(q, msg)
-
-    def handle_syncdir_scandir(self, msg, q):
-        # recursively scan a local path and return all found file/dir metadata
-        msg['type'] = 'future'
-
-        try:
-            msg['data'] = operators.syncdir_scandir_local(msg['path'], exclude=msg.get('exclude'))
-        except Exception:
-            log_error('Exception handling msg in handle_syncdir_scandir:', msg)
-            tb = traceback.format_exc().strip()
-            print(tb)
-            msg['error'] = tb
-
-        self.send_msg(q, msg)
-
-    def handle_server_shell(self, msg, q):
-        # run a shell command and return output and return code
-        msg['type'] = 'future'
-
-        try:
-            start = time.time()
-            p = subprocess.run(msg['cmds'], shell=True, capture_output=True, **msg['kwds'])
-            msg['data'] = {
-                'rc': p.returncode,
-                'output': p.stdout.decode('utf8') + '\n' + p.stderr.decode('utf8'),
-                'elapsed': elapsed(start),
-            }
-        except Exception:
-            log_error('Exception handling msg in handle_server_shell:', msg)
-            tb = traceback.format_exc().strip()
-            print(tb)
-            msg['error'] = tb
-
-        self.send_msg(q, msg)
+        q.put(msg_result)

@@ -74,7 +74,7 @@ class SaltyClient(MsgMixin):
 
         msg['type'] = 'future'
         msg['result'] = {'results': results, 'output': '\n'.join(output), 'elapsed': elapsed(start)}
-        self.send_msg(q, msg)
+        q.put(msg)
 
         rc = sum(_['rc'] for _ in results)
         log(f'Run {msg["context"]["id"]} {msg["context"]["role"]} {rc} {msg["result"]["elapsed"]:.6f}')
@@ -84,19 +84,19 @@ class SaltyClient(MsgMixin):
     def get_file(self, sock, path, **opts):
         msg = {'type': 'get_file', 'path': path}
         msg.update(opts)
-        return self.do_rpc(sock, msg)
+        return self.do_rpc(msg, sock)
 
     def syncdir_get_file(self, sock, path):
         msg = {'type': 'syncdir_get_file', 'path': path}
-        return self.do_rpc(sock, msg)
+        return self.do_rpc(msg, sock)
 
     def syncdir_scandir(self, sock, path, exclude=None):
         msg = {'type': 'syncdir_scandir', 'path': path, 'exclude': exclude}
-        return self.do_rpc(sock, msg)
+        return self.do_rpc(msg, sock)
 
     def server_shell(self, sock, cmds, **kwds):
         msg = {'type': 'server_shell', 'cmds': cmds, 'kwds': kwds}
-        return self.do_rpc(sock, msg)
+        return self.do_rpc(msg, sock)
 
     # / RPC wrappers
 

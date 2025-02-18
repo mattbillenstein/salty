@@ -12,13 +12,9 @@ cffi==1.17.1
     # via pynacl
 click==8.1.8
     # via pip-tools
-flake8==7.1.1
+flake8==7.1.2
     # via -r requirements.in
 gevent==24.11.1
-    # via
-    #   -r requirements.in
-    #   geventmp
-geventmp==0.0.9
     # via -r requirements.in
 greenlet==3.1.1
     # via gevent
