@@ -31,15 +31,24 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
     def handle(self, sock, addr):
         log(f'Connection established {addr[0]}:{addr[1]}')
 
-        # gipc, geventmp, and patched multiprocessing are all broken in various
-        # ways.
+        # With gevent we were getting bottle-necked in the server process with
+        # many clients and/or large file transfers since all the file I/O, TLS,
+        # and networking/messaging had to be done on a single cpu thread.
         #
-        # All we want is to get a new process with a valid handle to
-        # the client socket, a reliable way to communicate with it, and with a
-        # new event loop...
+        # So, having a thread or process per client for this is ideal, but
+        # given the GIL threads are probably out, and given gevent, fork() et
+        # al are problematic.
         #
-        # The simplest thing seems to be to create a socket pair and pass one
-        # end of that and the client socket via:
+        # So, I tried gipc, geventmp, and patched multiprocessing - but each
+        # one is broken in various ways, and I can't find good evidence the
+        # first two are heavily used.
+        #
+        # All we want is to get a new process with a valid handle to the client
+        # socket, a reliable way to communicate with it, and with a new event
+        # loop...
+        #
+        # The simplest thing I've come across seems to be to create a socket
+        # pair and pass one end of that and the client socket via:
         #
         #    subprocess.run([sys.argv[0], ...], pass_fds=(sock, sock2))
         #
@@ -50,6 +59,12 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
         # This probably isn't that fast compared to threads or just fork(), but
         # for long-lived connections (hours, days, weeks) should be more than
         # fine.
+        #
+        # The client process also needs the keyroot since we need to wrap the
+        # passed client socket with tls; and fileroot to directly do
+        # file-serving. This offloads these cpu-bound tasks to a process per
+        # client which means we shouldn't get bottlenecked on the single server
+        # process as before.
 
         client_sock, server_sock = socket.socketpair()
         args = [
