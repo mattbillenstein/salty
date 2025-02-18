@@ -1,9 +1,9 @@
 Salty - devops inspired by Saltstack, but simpler.
 
 This is an experiment to see with how little code I could build a useful
-SaltStack-like deployment system. As of July 2023, that is about 1300 LOC, and
-I'm using it on a couple projects in production/staging/dev environments. It
-supports Linux (primary tested on Ubuntu LTS) and MacOS using Python3.
+SaltStack-like deployment system. As of February 2025, that is about 2000 LOC,
+and I'm using it on a couple projects in production/staging/dev environments.
+It supports Linux (primary tested on Ubuntu LTS) and MacOS using Python3.
 
 It currently implements server/client over msgpack-rpc using gevent TLS/TCP
 sockets, a simple request/response mechanism for triggering deployments across
@@ -110,39 +110,48 @@ Below is some simple documentation for what is currently available in writing
 roles and I encourage you to consult the source in the "run" method in
 operators.py:
 
-  https://github.com/mattbillenstein/salty/blob/master/operators.py
+  https://github.com/mattbillenstein/salty/blob/master/lib/operators.py
 
 Common Imports available in roles/templates:
   os, os.path, json
 
 Functions available in roles:
   File management:
-    copy(src, dst, user=DEFAULT_USER, mode=0o644):
+    copy(src, dst, user=DEFAULT_USER, mode=0o644)
       copy src file from server to dst path on client
 
-    line_in_file(line, path, user=DEFAULT_USER, mode=0o644):
+    remove(path):
+      recursively remove a path (see shutil.rmtree)
+
+    line_in_file(line, path, user=DEFAULT_USER, mode=0o644)
 	  ensure given line is in file at path, create the file if it doesn't exist
 
-    makedirs(path, user=DEFAULT_USER, mode=0o755):
+    makedirs(path, user=DEFAULT_USER, mode=0o755)
       make all directories up to final directory denoted by path
 
-    render(src, dst, user=DEFAULT_USER, mode=0o644, **kw):
+    render(src, dst, user=DEFAULT_USER, mode=0o644, **kw)
       render src template from server to dst path on client
 
-    symlink(src, dst):
+    symlink(src, dst)
       symlink src to dest on client
 
-    syncdir(src, dst, user=DEFAULT_USER, mode=0o755):
+    syncdir(src, dst, user=DEFAULT_USER, mode=0o755, exclude=None)
       Synchronize a src dir on the server to the dst dir on the client - ala
       rsync
 
   Shell commands:
     shell(cmds, **kw)
-      Run a string of shell commands, **kw are optional Popen kwargs
+      Run shell commands on client, **kw are optional Popen kwargs
+
+    server_shell(cmds, **kw)
+      Run shell commands on server, **kw are optional Popen kwargs
 
   User management:
     useradd(username, system=False)
       Add a user and group of same name
+
+    usergroups(username, groups)
+      Add/remove user's groups
 
   Misc
     print(s)
@@ -150,9 +159,6 @@ Functions available in roles:
 
     is_changed()
       True if command in the current role has changed
-
-    get_ips(role, key='private_ip')
-      get a list of ip addresses by role
 
 Context available in templates:
   id:
