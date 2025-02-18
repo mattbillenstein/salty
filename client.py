@@ -1,7 +1,6 @@
 import os
 import os.path
 import socket
-import ssl
 import time
 import traceback
 from queue import Queue

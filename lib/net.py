@@ -4,7 +4,6 @@ import socket
 import struct
 import ssl
 import uuid
-from queue import Queue
 
 import gevent
 import msgpack

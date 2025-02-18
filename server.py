@@ -36,8 +36,8 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
         #
         # All we want is to get a new process with a valid handle to
         # the client socket, a reliable way to communicate with it, and with a
-        # new gevent loop...
-        # 
+        # new event loop...
+        #
         # The simplest thing seems to be to create a socket pair and pass one
         # end of that and the client socket via:
         #
@@ -48,12 +48,14 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
         # discard the event loop as well.
         #
         # This probably isn't that fast compared to threads or just fork(), but
-        # for long-lived connections (days, weeks) should be more than fine.
+        # for long-lived connections (hours, days, weeks) should be more than
+        # fine.
 
         client_sock, server_sock = socket.socketpair()
-        args = [sys.argv[0], 'client-proc',
-            f'--client-fd={sock.fileno()}', f'--server-fd={server_sock.fileno()}',
+        args = [
+            sys.argv[0], 'client-proc',
             f'--keyroot={self.keyroot}', f'--fileroot={self.fileroot}',
+            f'--client-fd={sock.fileno()}', f'--server-fd={server_sock.fileno()}',
         ]
         p = subprocess.Popen(args, pass_fds=(sock.fileno(), server_sock.fileno()))
 
