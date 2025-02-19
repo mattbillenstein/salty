@@ -126,6 +126,8 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
 
             if self.clients.get(client_id) is client_q:
                 self.clients.pop(client_id)
+                if client_id in self.facts:
+                    self.facts.pop(client_id)
 
             if p.poll() is None:
                 p.kill()
@@ -140,13 +142,15 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
         q.put({'type': 'pong'})
 
     def handle_hosts(self, msg, q):
-        meta = get_meta(self.fileroot, self.crypto_pass)
-        hosts = self.get_hosts(meta)
+        hosts = self.get_hosts()
         msg['hosts'] = {k: v for k, v in hosts.items() if v['facts']}
         q.put(msg)
 
-    def get_hosts(self, meta):
-        # Return host metadata / facts for all available hosts
+    def get_hosts(self):
+        # Return host metadata / facts for all available hosts - this context
+        # is used when running a role for a host
+        meta = get_meta(self.fileroot, self.crypto_pass)
+
         hosts = {}
         for cluster, servers in meta['hosts'].items():
             for id, data in servers.items():
@@ -182,15 +186,15 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
         msg_result = {'type': 'apply_result', 'results': results}
 
         try:
+            # target can be cluster or host id glob
             target = msg.get('target')
             target_cluster = None
             if target and target.startswith('cluster:'):
                 target_cluster = target.split(':')[1]
                 target = None
 
-            meta = get_meta(self.fileroot, self.crypto_pass)
-
-            hosts = self.get_hosts(meta)
+            # host id -> host metadata / cluster / facts / vars
+            hosts = self.get_hosts()
 
             for id in list(hosts):
                 v = hosts[id]
@@ -210,9 +214,9 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
 
             context = {k: v for k, v in msg.items() if k not in ('type', 'target', 'roles', 'skip')}
 
-            for id, q2 in self.clients.items():
+            for id, client_q in self.clients.items():
                 if id not in hosts:
-                    log_error(f'Apply missing host {id} in metadata')
+                    log_error(f'Apply missing host {id} in metadata / facts')
                     continue
 
                 if target_cluster and hosts[id]['cluster'] != target_cluster:
@@ -240,14 +244,16 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
                     ctx = {'id': id, 'role': role, 'hosts': hosts, 'me': hosts[id], 'bootstrap': False}
                     ctx.update(context)
                     msg = {'type': 'run', 'content': content, 'context': ctx}
-                    results[id][role] = (msg, q2)
+
+                    # the run msg and Queue we'll do the rpc on
+                    results[id][role] = (msg, client_q)
 
             # scatter by host, then collect - roles must be run sequentially
             def dispatch(host_roles):
                 for role, tup in list(host_roles.items()):
-                    # if dict, either host or role was skipped and a stub
+                    # If not tuple, either host or role was skipped and a stub
                     # result returned... Otherwise, do rpc.
-                    if not isinstance(tup, dict):
+                    if isinstance(tup, tuple):
                         msg, q = tup
                         ctx = msg['context']
                         t = time.time()
