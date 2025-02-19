@@ -1,6 +1,5 @@
 import os
 import os.path
-import socket
 import struct
 import ssl
 import uuid
@@ -33,8 +32,18 @@ def recvall(sock, size):
     return data
 
 class MsgMixin:
-    # Reading/writing sockets and futures/rpc mixin, subclasses read and write
-    # whole messages which are just dicts {'type': '<type>', ...payload...}
+    # Reading/writing sockets and futures/rpc mixin
+    #
+    # Subclasses read and write whole messages using recv_msg/send_msgwhich are
+    # just dicts:
+    #
+    #     {'type': '<type>', ...payload...}
+    #
+    # And encoded on the wire using msgpack.
+    #
+    # Writing to sockets is generally done in a dedicated greenlet reading from
+    # a Queue so we have proper message framing - ie, we're not mixing messages
+    # on the wire.
 
     def wrap_socket(self, sock, server_side=False):
         proto = ssl.PROTOCOL_TLS_CLIENT
@@ -84,23 +93,15 @@ class MsgMixin:
             msg = q.get()
             if not msg:
                 return
-            if isinstance(sock, socket.socket):
-                with gevent.Timeout(SOCKET_TIMEOUT, CONNECTION_TIMEOUT):
-                    self.send_msg(sock, msg)
-            else:
-                sock.put(msg)
+            with gevent.Timeout(SOCKET_TIMEOUT, CONNECTION_TIMEOUT):
+                self.send_msg(sock, msg)
 
     def _reader(self, sock, q):
         # read from sock and put to q in a separate greenlet
         while 1:
-            if isinstance(sock, socket.socket):
-                with gevent.Timeout(SOCKET_TIMEOUT, CONNECTION_TIMEOUT):
-                    msg = self.recv_msg(sock)
-            else:
-                msg = sock.get()
-
+            with gevent.Timeout(SOCKET_TIMEOUT, CONNECTION_TIMEOUT):
+                msg = self.recv_msg(sock)
             q.put(msg)
-
             if not msg:
                 # exit after put so we wake any readers who can also exit
                 return
@@ -126,6 +127,6 @@ class MsgMixin:
         if method:
             gevent.spawn(method, msg, q)
         else:
+            log_error(f'Unhandled message: {msg}')
             msg['error'] = f"Method {msg['type']} not found"
             q.put(msg)
-            log_error(f'Unhandled message: {msg}')

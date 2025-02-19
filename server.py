@@ -17,6 +17,13 @@ from lib.util import elapsed, get_crypto_pass, get_meta, log, log_error
 
 
 class SaltyServer(gevent.server.StreamServer, MsgMixin):
+    # The server process, listen/accept and fork a subprocess for handling
+    # client connections.
+    #
+    # Internally we keep a registry of client connections and their facts. On
+    # an apply we scatter/gather roles to each matched client and return a
+    # combined result of what was done.
+
     def __init__(self, *args, **kwargs):
         self.clients = {}
         self.facts = {}

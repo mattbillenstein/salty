@@ -13,9 +13,8 @@ from lib.net import MsgMixin
 from lib.util import elapsed, get_crypto_pass, hash_data, log, log_error
 
 class ClientProc(MsgMixin):
-
-    # Do heavy lifting for a client connection in a sub-process, proxy
-    # unhandled messages to the actual server.
+    # Terminate TLS for this client and handle file/shell rpcs - proxy
+    # everything else to the server process.
 
     def __init__(self, client_fd, server_fd, keyroot, fileroot):
         self.futures = {}
@@ -82,13 +81,13 @@ class ClientProc(MsgMixin):
                     break
         finally:
             log(f'Connection lost {addr[0]}:{addr[1]} pid:{pid}')
-
             [_.kill() for _ in threads if not _.dead]
             self.client_sock.close()
             self.server_sock.close()
 
     def handle_future(self, msg, q):
-        # Pull AsyncResult from registry and set it
+        # Override base class method - if we get a message we don't have a
+        # future for, send that msg to server.
         ar = self.futures.pop(msg['future_id'], None)
         if ar:
             # our future, set it

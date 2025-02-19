@@ -15,13 +15,19 @@ PING_INTERVAL = 10.0
 FACTS_INTERVAL = 60.0
 
 class SaltyClient(MsgMixin):
+    # The client process, we connect to the server, identify with id/facts,
+    # start a ping process to keep our connection alive and periodically update
+    # facts, and then wait for commands.
+
     def __init__(self, addr, keyroot=os.getcwd(), id=None, path=''):
+        self.futures = {}
+        self.keyroot = keyroot
+
         self.addr = addr
         self.id = id
-        self.keyroot = keyroot
         self.path = path
+
         self._last_pong = time.time()
-        self.futures = {}
 
     def connect(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -36,28 +42,33 @@ class SaltyClient(MsgMixin):
         # Run a role on this client and report back results of each command
         start = time.time()
 
-        # these closures mainly capture the Queue that we write the rpcs to
+        # these closures capture the Queue that we write the rpc response to
         # during the run for these functions which get injected into the global
         # namespace for the role python file being exec'd
         def get_file(path, **opts):
-            msg = self.get_file(q, path, **opts)
-            assert not msg.get('error'), msg['error']
-            return msg
+            msg = {'type': 'get_file', 'path': path}
+            msg.update(opts)
+            res = self.do_rpc(msg, q)
+            assert not res.get('error'), res['error']
+            return res
 
         def syncdir_get_file(path):
-            msg = self.syncdir_get_file(q, path)
-            assert not msg.get('error'), msg['error']
-            return msg
+            msg = {'type': 'syncdir_get_file', 'path': path}
+            res = self.do_rpc(msg, q)
+            assert not res.get('error'), res['error']
+            return res
 
         def syncdir_scandir(path, exclude=None):
-            msg = self.syncdir_scandir(q, path, exclude=exclude)
-            assert not msg.get('error'), msg['error']
-            return msg['data']
+            msg = {'type': 'syncdir_scandir', 'path': path, 'exclude': exclude}
+            res = self.do_rpc(msg, q)
+            assert not res.get('error'), res['error']
+            return res['data']
 
         def server_shell(cmds, **kwds):
-            msg = self.server_shell(q, cmds, **kwds)
-            assert not msg.get('error'), msg['error']
-            return msg['data']
+            msg = {'type': 'server_shell', 'cmds': cmds, 'kwds': kwds}
+            res = self.do_rpc(msg, q)
+            assert not res.get('error'), res['error']
+            return res['data']
 
         content = msg.pop('content')  # this is the role python file we will exec
         results, output = operators.run(
@@ -78,29 +89,8 @@ class SaltyClient(MsgMixin):
         rc = sum(_['rc'] for _ in results)
         log(f'Run {msg["context"]["id"]} {msg["context"]["role"]} {rc} {msg["result"]["elapsed"]:.6f}')
 
-    # RPC wrappers
-
-    def get_file(self, sock, path, **opts):
-        msg = {'type': 'get_file', 'path': path}
-        msg.update(opts)
-        return self.do_rpc(msg, sock)
-
-    def syncdir_get_file(self, sock, path):
-        msg = {'type': 'syncdir_get_file', 'path': path}
-        return self.do_rpc(msg, sock)
-
-    def syncdir_scandir(self, sock, path, exclude=None):
-        msg = {'type': 'syncdir_scandir', 'path': path, 'exclude': exclude}
-        return self.do_rpc(msg, sock)
-
-    def server_shell(self, sock, cmds, **kwds):
-        msg = {'type': 'server_shell', 'cmds': cmds, 'kwds': kwds}
-        return self.do_rpc(msg, sock)
-
-    # / RPC wrappers
-
     def _pinger(self, q):
-        # keep our long-lived socket alive, ping every N seconds and update
+        # Keep our long-lived socket alive, ping every N seconds and update
         # facts periodically, if we don't get a pong back in 1.5x the ping
         # interval, consider the socket stuck and exit - this will cause the
         # handle function to exit and the serve_forever loop to re-connect.
@@ -127,7 +117,7 @@ class SaltyClient(MsgMixin):
                 break
 
     def handle(self, sock, addr):
-        # Connection main loop, handle messages received from the server and
+        # Connection message loop, handle messages received from the server and
         # create two threads; one that writes messages back to the socket from
         # a Queue, and another that pings the server every N seconds
         log(f'Connection established {addr[0]}:{addr[1]}')
@@ -156,8 +146,7 @@ class SaltyClient(MsgMixin):
                     break
         finally:
             log(f'Connection lost {addr[0]}:{addr[1]}')
-            g.kill()
-            p.kill()
+            [_.kill() for _ in (g, p) if not _.dead]
             sock.close()
 
     def serve_forever(self):
@@ -177,13 +166,16 @@ class SaltyClient(MsgMixin):
             finally:
                 if sock:
                     sock.close()
-                    sock = None
 
             time.sleep(3)
 
     def run(self, msg):
         # Run a single message and return result - used by the cli for
         # apply/hosts/etc
+        #
+        # I don't use a Queue / greenlet writer here since there is only the
+        # current thread interacting with this socket...
+
         sock = self.connect()
         self.send_msg(sock, msg)
 
