@@ -3,8 +3,7 @@
 set -eo pipefail
 
 if [ "$1" == "--clean" ]; then
-  git clean -xdf
-  scripts/venv.sh
+  scripts/venv.sh --clean
 fi
 
 pushd "$(dirname "$0")/.." > /dev/null

@@ -1,4 +1,3 @@
-import hashlib
 import os
 import os.path
 import shutil
@@ -6,12 +5,12 @@ import stat
 import subprocess
 import time
 import traceback
-from collections import defaultdict
 
 import mako.exceptions
 import mako.template
 
-from compat import grp, pwd, useradd_command, usergroups_command
+from .compat import pwd, useradd_command, usergroups_command
+from .util import hash_data, hash_file, elapsed
 
 DEFAULT_USER = pwd.getpwuid(os.getuid()).pw_name
 
@@ -21,18 +20,6 @@ IMPORTS = [
     'import os.path',
     'import json',
 ]
-
-def hash_data(data):
-    return hashlib.sha1(data).hexdigest()
-
-def hash_file(path):
-    if os.path.isfile(path):
-        with open(path, 'rb') as f:
-            return hash_data(f.read())
-    return None
-
-def elapsed(start):
-    return round(time.time() - start, 6)
 
 def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scandir, server_shell):
     # these are the operators available in roles, they're nested functions here
@@ -126,7 +113,7 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
 
             if _set_user_and_mode(path, user, mode):
                 result['changed'] = True
-        except Exception as e:
+        except Exception:
             result['rc'] = 1
             result['error'] = traceback.format_exc()
 
@@ -148,7 +135,7 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
                 result['removed'] = True
                 result['changed'] = True
 
-        except Exception as e:
+        except Exception:
             result['rc'] = 1
             result['error'] = traceback.format_exc()
 
@@ -175,7 +162,7 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
 
             if _set_user_and_mode(dst, user, mode):
                 result['changed'] = True
-        except Exception as e:
+        except Exception:
             result['rc'] = 1
             result['error'] = traceback.format_exc()
 
@@ -201,7 +188,7 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
                 template = res['data'].decode('utf8')
                 try:
                     data = mako.template.Template(template, imports=IMPORTS).render(**context, **kw).encode('utf8')
-                except Exception as e:
+                except Exception:
                     # mako text_error_template gives us a dump of where the
                     # error in the template occurred...
                     result['rc'] = 1
@@ -219,7 +206,7 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
 
             if _set_user_and_mode(dst, user, mode):
                 result['changed'] = True
-        except Exception as e:
+        except Exception:
             result['rc'] = 1
             result['error'] = traceback.format_exc()
 
@@ -265,7 +252,7 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
 
             if _set_user_and_mode(path, user, mode):
                 result['changed'] = True
-        except Exception as e:
+        except Exception:
             result['rc'] = 1
             result['error'] = traceback.format_exc()
 
@@ -368,7 +355,7 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
             for typ, path in changes:
                 cngs[typ] += 1
             result['changes'] = cngs
-        except Exception as e:
+        except Exception:
             result['rc'] = 1
             result['error'] = traceback.format_exc()
 
@@ -381,6 +368,7 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
         return any([_['changed'] for _ in results])
 
     output = []
+
     def capture_print(x):
         output.append(str(x))
 
@@ -403,8 +391,8 @@ def run(content, context, start, PATH, get_file, syncdir_get_file, syncdir_scand
     content = '\n'.join(IMPORTS) + '\n' + content
     try:
         exec(content, g)
-    except Exception as e:
-        result = {'cmd': f'error in exec', 'rc': 1, 'changed': True}
+    except Exception:
+        result = {'cmd': 'error in exec', 'rc': 1, 'changed': True}
         result['error'] = traceback.format_exc()
         results.append(result)
 
@@ -436,8 +424,7 @@ def syncdir_scandir_local(src, exclude=None):
         elif entry.is_dir():
             # filter to matches on entry.name + '/' and then strip that prefix
             prefix = entry.name + os.path.sep
-            nexclude = [_ for _ in exclude if _.startswith(prefix)]
-            nexclude = [_.replace(prefix, '', 1) for _ in nexclude]
+            nexclude = [_.replace(prefix, '', 1) for _ in exclude if _.startswith(prefix)]
             attrs['type'] = 'dir'
             attrs['entries'] = syncdir_scandir_local(os.path.join(src, entry.name), exclude=nexclude)
         else:
@@ -450,11 +437,10 @@ def syncdir_scandir_local(src, exclude=None):
 def _syncdir(src, dst, user, srcs, dsts, syncdir_get_file):
     changes = []
 
-
     # delete first if not in src, or different type, then remove so we copy
     # later
     for dname in list(dsts):
-        if not dname in srcs or \
+        if dname not in srcs or \
                 dsts[dname]['type'] != srcs[dname]['type'] or \
                 srcs[dname]['type'] == 'link' and dsts[dname]['target'] != srcs[dname]['target']:
             target = os.path.join(dst, dname)

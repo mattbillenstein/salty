@@ -1,7 +1,3 @@
-# keys
-*.pem
-*.pass
-
 # python
 *.pyc
 __pycache__
