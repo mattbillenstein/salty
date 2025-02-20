@@ -1,6 +1,4 @@
-In this directory, run ../scripts/venv.sh
-
-In one window each, run:
+In this directory, in one window each, run:
 
 ./server
 ./client

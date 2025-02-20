@@ -1,0 +1,15 @@
+pushd "$(dirname "$BASH_SOURCE")" > /dev/null
+DIR="$(pwd)"
+popd > /dev/null
+
+VENV="$DIR/.venv"
+if ! shasum -c --quiet $VENV/shasum.txt 2> /dev/null; then
+  rm -fR $VENV
+  python3 -m venv $VENV
+  source $VENV/bin/activate
+  pip install -U pip
+  pip install -r $DIR/requirements.txt
+  shasum $DIR/requirements.txt > $VENV/shasum.txt
+else
+  source $VENV/bin/activate
+fi
