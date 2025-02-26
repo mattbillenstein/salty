@@ -99,7 +99,7 @@ def cli(hostport, args, opts, verbose, bootstrap=False):
     result = SaltyClient(hostport, **opts).run(msg)
 
     if result.get('error'):
-        log_error(f'Errors in result:\n{result["error"]}')
+        log_error(f'Errors in result: {result["error"]}')
         return 1
 
     # Unpack apply result and based on verbosity, display changed/errored

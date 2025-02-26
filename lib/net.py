@@ -85,13 +85,6 @@ class MsgMixin:
                 return None
 
             size = struct.unpack('!I', data)[0]
-            if size > 500_000_000:
-                # FIXME, this is only really a limit for big file copies,
-                # implement a chunked protocol for get_file / syncdir_get_file
-                # so we don't have to have the entire file in RAM... Perhaps
-                # 64MB chunks.
-                raise ConnectionError('Message too big')
-
             data = recvall(sock, size)
             if not data:
                 return None
@@ -118,23 +111,32 @@ class MsgMixin:
                 # exit after put so we wake any readers who can also exit
                 return
 
-    def do_rpc(self, msg, q):
+    def do_rpc(self, msg, q, futures=None):
         # Register a future using AsyncResult, send the request, and block
         # until it's set
+        if futures is None:
+            futures = self.futures
+
         msg['future_id'] = id = str(uuid.uuid4())
-        self.futures[id] = ar = AsyncResult()
+        futures[id] = ar = AsyncResult()
         q.put(msg)
         return ar.get()
 
-    def handle_future(self, msg, q):
+    def handle_future(self, msg, q, futures=None):
         # Pull AsyncResult from registry and set it
-        ar = self.futures.pop(msg['future_id'], None)
+        if futures is None:
+            futures = self.futures
+
+        ar = futures.pop(msg['future_id'], None)
         if ar:
             ar.set(msg)
         else:
             log_error(f'Unhandled future: {msg["future_id"]}')
 
-    def handle_msg(self, msg, q):
+    def handle_msg(self, msg, q, futures=None):
+        if msg['type'] == 'future':
+            return self.handle_future(msg, q, futures)
+
         method = getattr(self, 'handle_' + msg['type'], None)
         if method:
             gevent.spawn(method, msg, q)

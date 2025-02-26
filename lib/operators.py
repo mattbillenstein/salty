@@ -441,7 +441,6 @@ def _syncdir_get_file(func, source, target):
         while 1:
             x = func(source, offset=offset)
             f.write(x['data'])
-            print(source, target, offset, len(x['data']), offset + len(x['data']), x['size'])
             offset += len(x['data'])
             if offset == x['size']:
                 break

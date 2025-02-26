@@ -184,8 +184,7 @@ class SaltyClient(MsgMixin):
             try:
                 msg = self.recv_msg(sock, timeout=5)
                 if not msg:
-                    log_error('Server unexpectedly disconnected...')
-                    break
+                    return {'error': 'Server unexpectedly disconnected...'}
                 if msg['type'] != 'pong':
                     return msg
                 log(f'Working {int(time.time()-start):} seconds ...', end='\r')

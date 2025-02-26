@@ -27,7 +27,7 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
     def __init__(self, *args, **kwargs):
         self.clients = {}
         self.facts = {}
-        self.futures = {}
+        self.futures = defaultdict(dict)  # here it's client_id -> {}
 
         self.fileroot = kwargs.pop('fileroot', os.getcwd())
         self.keyroot = kwargs.pop('keyroot', os.getcwd())
@@ -116,7 +116,7 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
                         self.clients[client_id] = client_q
                         self.facts[client_id] = msg['facts']
                     else:
-                        self.handle_msg(msg, client_q)
+                        self.handle_msg(msg, client_q, self.futures[client_id])
 
                 except OSError as e:
                     log_error(f'Connection lost {addr[0]}:{addr[1]} pid:{pid} exc:{e}')
@@ -124,10 +124,15 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
         finally:
             log(f'Connection lost {addr[0]}:{addr[1]} pid:{pid} {client_id}')
 
-            if self.clients.get(client_id) is client_q:
-                self.clients.pop(client_id)
-                if client_id in self.facts:
-                    self.facts.pop(client_id)
+            if client_id:
+                if self.clients.get(client_id) is client_q:
+                    self.clients.pop(client_id)
+                    if client_id in self.facts:
+                        self.facts.pop(client_id)
+
+                # wake up any waiting futures
+                for fid, ar in self.futures.pop(client_id, {}).items():
+                    ar.set({'type': 'future', 'future_id': fid, 'error': 'Connection lost'})
 
             if p.poll() is None:
                 p.kill()
@@ -184,6 +189,7 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
         start = time.time()
         results = defaultdict(dict)
         msg_result = {'type': 'apply_result', 'results': results}
+        error = 'Unknown error'
 
         try:
             # target can be cluster or host id glob
@@ -249,7 +255,8 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
                     results[id][role] = (msg, client_q)
 
             # scatter by host, then collect - roles must be run sequentially
-            def dispatch(host_roles):
+            def dispatch(id, host_roles):
+                nonlocal error
                 for role, tup in list(host_roles.items()):
                     # If not tuple, either host or role was skipped and a stub
                     # result returned... Otherwise, do rpc.
@@ -257,22 +264,33 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
                         msg, q = tup
                         ctx = msg['context']
                         t = time.time()
-                        host_roles[role] = m = self.do_rpc(msg, q)['result']
+                        m = self.do_rpc(msg, q, self.futures[id])
+                        if m.get('error'):
+                            error = m['error']
+                            raise Exception(m['error'])
+                        host_roles[role] = m = m['result']
                         rc = sum(_['rc'] for _ in m['results'])
                         log('RPC', ctx['id'], ctx['role'], rc, f'{elapsed(t):.6f}')
 
             greenlets = []
             for id, host_roles in results.items():
-                g = gevent.spawn(dispatch, host_roles)
+                g = gevent.spawn(dispatch, id, host_roles)
                 greenlets.append(g)
 
-            gevent.wait(greenlets)
+            gevent.joinall(greenlets)
 
-        except Exception:
+        except Exception as e:
             log_error('Exception handling msg in handle_apply:', msg)
             tb = traceback.format_exc().strip()
             log(tb)
             msg_result['error'] = tb
+
+        # sanitize / fail messages so we can send a response, some greenlets
+        # perhaps didn't finish...
+        for id, host_roles in list(results.items()):
+            for role, tup in list(host_roles.items()):
+                if isinstance(tup, tuple):
+                    host_roles[role] = {'rc': 1, 'elapsed': 0.0, 'results': [{'rc': 1, 'changed': False, 'error': error}]}
 
         msg_result['elapsed'] = elapsed(start)
         q.put(msg_result)
