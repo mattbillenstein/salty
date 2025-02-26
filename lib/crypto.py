@@ -27,31 +27,31 @@ class CryptoError(Exception):
     pass
 
 
-def encrypt(data, password):
+def _secretbox(password):
     if isinstance(password, str):
         password = password.encode('utf8')
+    keybytes = hashlib.pbkdf2_hmac('sha256', password, _SALT, 4)
+    return nacl.secret.SecretBox(keybytes)
 
+def _secretbox_nonce():
+    return nacl.utils.random(nacl.secret.SecretBox.NONCE_SIZE)
+
+def encrypt(data, password):
     if isinstance(data, str):
         data = data.encode('utf8')
 
-    keybytes = hashlib.pbkdf2_hmac('sha256', password, _SALT, 4)
-    noncebytes = nacl.utils.random(nacl.secret.SecretBox.NONCE_SIZE)
-    secretbox = nacl.secret.SecretBox(keybytes)
+    secretbox = _secretbox(password)
     try:
-        return secretbox.encrypt(data, noncebytes)
+        return secretbox.encrypt(data, _secretbox_nonce())
     except nacl.exceptions.CryptoError as e:
         raise CryptoError(e)
 
 
 def decrypt(data, password):
-    if isinstance(password, str):
-        password = password.encode('utf8')
-
     if isinstance(data, str):
         data = data.encode('utf8')
 
-    keybytes = hashlib.pbkdf2_hmac('sha256', password, _SALT, 4)
-    secretbox = nacl.secret.SecretBox(keybytes)
+    secretbox = _secretbox(password)
     try:
         return secretbox.decrypt(data)
     except nacl.exceptions.CryptoError as e:
@@ -59,24 +59,17 @@ def decrypt(data, password):
 
 
 def encrypt_stream(fin, fout, password):
-    if isinstance(password, str):
-        password = password.encode('utf8')
-    keybytes = hashlib.pbkdf2_hmac('sha256', password, _SALT, 4)
-    noncebytes = nacl.utils.random(nacl.secret.SecretBox.NONCE_SIZE)
-    secretbox = nacl.secret.SecretBox(keybytes)
+    secretbox = _secretbox(password)
     while 1:
         data = fin.read(_STREAM_BLOCK_SIZE)
         if not data:
             break
-        fout.write(secretbox.encrypt(data, noncebytes))
+        fout.write(secretbox.encrypt(data, _secretbox_nonce()))
     fout.flush()
 
 
 def decrypt_stream(fin, fout, password):
-    if isinstance(password, str):
-        password = password.encode('utf8')
-    keybytes = hashlib.pbkdf2_hmac('sha256', password, _SALT, 4)
-    secretbox = nacl.secret.SecretBox(keybytes)
+    secretbox = _secretbox(password)
     while 1:
         data = fin.read(_STREAM_BLOCK_SIZE_ENCRYPTED)
         if not data:
