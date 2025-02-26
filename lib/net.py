@@ -8,6 +8,7 @@ import gevent
 import msgpack
 from gevent.event import AsyncResult
 
+from . import crypto
 from .util import log_error
 
 class ConnectionTimeout(ConnectionError):
@@ -45,7 +46,13 @@ class MsgMixin:
     # a Queue so we have proper message framing - ie, we're not mixing messages
     # on the wire.
 
-    def wrap_socket(self, sock, server_side=False):
+    def xxx_wrap_socket(self, sock, server_side=False):
+        # Python ssl will only recv 16kb at a time with non-blocking sockets
+        # while holding the GIL, there is a PR to improve this, but who knows
+        # when it'll get merged. It makes reading large files over these
+        # sockets very very slow...
+        #
+        # https://github.com/python/cpython/pull/31492
         proto = ssl.PROTOCOL_TLS_CLIENT
         if server_side:
             proto = ssl.PROTOCOL_TLS_SERVER
@@ -57,6 +64,11 @@ class MsgMixin:
         )
         ctx.load_verify_locations(os.path.join(self.keyroot, 'cert.pem'))
         return ctx.wrap_socket(sock, server_side=server_side)
+
+    def wrap_socket(self, sock, server_side=False):
+        with open(os.path.join(self.keyroot, 'crypto.pass')) as f:
+            password = f.read().strip()
+        return EncryptedSocket(sock, password)
 
     def send_msg(self, sock, msg):
         # encode messages as 4-bytes message size (up to 4GiB) followed by a
@@ -130,3 +142,40 @@ class MsgMixin:
             log_error(f'Unhandled message: {msg}')
             msg['error'] = f"Method {msg['type']} not found"
             q.put(msg)
+
+
+class EncryptedSocket:
+    def __init__(self, sock, password):
+        self.sock = sock
+        self.buf = b''
+        self.box = crypto._secretbox(password)
+
+        self.connect = self.sock.connect
+        self.close = self.sock.close
+        self.getpeername = self.sock.getpeername
+
+    def sendall(self, data):
+        data = self.box.encrypt(data, crypto._secretbox_nonce())
+        # FIXME, encrypt message size?
+        data = struct.pack('!I', len(data)) + data
+        self.sock.sendall(data)
+
+    def recv(self, size):
+        if len(self.buf) >= size:
+            data = self.buf[:size]
+            self.buf = self.buf[size:]
+            return data
+
+        data = recvall(self.sock, 4)
+        if not data:
+            return None
+
+        esize = struct.unpack('!I', data)[0]
+        data = recvall(self.sock, esize)
+        if not data:
+            return None
+
+        self.buf += self.box.decrypt(data)
+        data = self.buf[:size]
+        self.buf = self.buf[size:]
+        return data
