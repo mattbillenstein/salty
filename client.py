@@ -52,8 +52,8 @@ class SaltyClient(MsgMixin):
             assert not res.get('error'), res['error']
             return res
 
-        def syncdir_get_file(path):
-            msg = {'type': 'syncdir_get_file', 'path': path}
+        def syncdir_get_file(path, offset=0):
+            msg = {'type': 'syncdir_get_file', 'path': path, 'offset': offset}
             res = self.do_rpc(msg, q)
             assert not res.get('error'), res['error']
             return res

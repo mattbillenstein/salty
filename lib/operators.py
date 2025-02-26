@@ -434,6 +434,18 @@ def syncdir_scandir_local(src, exclude=None):
 
     return d
 
+def _syncdir_get_file(func, source, target):
+    # this handles chunking across the wire
+    with open(target, 'wb') as f:
+        offset = 0
+        while 1:
+            x = func(source, offset=offset)
+            f.write(x['data'])
+            print(source, target, offset, len(x['data']), offset + len(x['data']), x['size'])
+            offset += len(x['data'])
+            if offset == x['size']:
+                break
+
 def _syncdir(src, dst, user, srcs, dsts, syncdir_get_file):
     changes = []
 
@@ -460,9 +472,7 @@ def _syncdir(src, dst, user, srcs, dsts, syncdir_get_file):
             # create file/link/dir if it doesn't exists, set utime/chown/chmod
             changes.append(('+', target))
             if sattrs['type'] == 'file':
-                x = syncdir_get_file(source)
-                with open(target, 'wb') as f:
-                    f.write(x['data'])
+                _syncdir_get_file(syncdir_get_file, source, target)
                 os.utime(target, ns=(sattrs['mtime'], sattrs['mtime']))
             elif sattrs['type'] == 'link':
                 os.symlink(sattrs['target'], target)
@@ -477,9 +487,7 @@ def _syncdir(src, dst, user, srcs, dsts, syncdir_get_file):
             # copy changed file on mtime / size mismatch, set utime/chown/chmod
             changes.append(('.', target))
 
-            x = syncdir_get_file(source)
-            with open(target, 'wb') as f:
-                f.write(x['data'])
+            _syncdir_get_file(syncdir_get_file, source, target)
 
             os.utime(target, ns=(sattrs['mtime'], sattrs['mtime']))
             os.chown(target, user.pw_uid, user.pw_gid, follow_symlinks=False)
