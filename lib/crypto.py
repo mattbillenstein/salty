@@ -18,65 +18,43 @@ _SALT = b'7cbbb992db5d800238a898459dc4e25e67773b5923d2a836cef718891e5c7f1f'
 # Stream encryption is just 1MiB encrypted blocks concatenated -- to decrypt we
 # need to read the message plus 40 bytes for the nonce and authenticator
 _STREAM_BLOCK_SIZE = 1024 * 1024
-_NONCE_SIZE = nacl.secret.SecretBox.NONCE_SIZE
-_AUTHENTICATOR_SIZE = 16  # can't find where this is defined in nacl
-_STREAM_BLOCK_SIZE_ENCRYPTED = _STREAM_BLOCK_SIZE + _NONCE_SIZE + _AUTHENTICATOR_SIZE
+_STREAM_BLOCK_SIZE_ENCRYPTED = _STREAM_BLOCK_SIZE + nacl.secret.SecretBox.NONCE_SIZE + nacl.secret.SecretBox.MACBYTES
 
-
-class CryptoError(Exception):
-    pass
-
-
-def _secretbox(password):
+def make_secretbox(password):
     if isinstance(password, str):
         password = password.encode('utf8')
     keybytes = hashlib.pbkdf2_hmac('sha256', password, _SALT, 4)
     return nacl.secret.SecretBox(keybytes)
 
-def _secretbox_nonce():
-    return nacl.utils.random(nacl.secret.SecretBox.NONCE_SIZE)
-
 def encrypt(data, password):
     if isinstance(data, str):
         data = data.encode('utf8')
-
-    secretbox = _secretbox(password)
-    try:
-        return secretbox.encrypt(data, _secretbox_nonce())
-    except nacl.exceptions.CryptoError as e:
-        raise CryptoError(e)
-
+    secretbox = make_secretbox(password)
+    return secretbox.encrypt(data)
 
 def decrypt(data, password):
     if isinstance(data, str):
         data = data.encode('utf8')
-
-    secretbox = _secretbox(password)
-    try:
-        return secretbox.decrypt(data)
-    except nacl.exceptions.CryptoError as e:
-        raise CryptoError(e)
-
+    secretbox = make_secretbox(password)
+    return secretbox.decrypt(data)
 
 def encrypt_stream(fin, fout, password):
-    secretbox = _secretbox(password)
+    secretbox = make_secretbox(password)
     while 1:
         data = fin.read(_STREAM_BLOCK_SIZE)
         if not data:
             break
-        fout.write(secretbox.encrypt(data, _secretbox_nonce()))
+        fout.write(secretbox.encrypt(data))
     fout.flush()
 
-
 def decrypt_stream(fin, fout, password):
-    secretbox = _secretbox(password)
+    secretbox = make_secretbox(password)
     while 1:
         data = fin.read(_STREAM_BLOCK_SIZE_ENCRYPTED)
         if not data:
             break
         fout.write(secretbox.decrypt(data))
     fout.flush()
-
 
 def encrypt_string(data, password):
     return base64.urlsafe_b64encode(encrypt(data, password)).decode('utf8')

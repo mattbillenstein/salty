@@ -133,12 +133,12 @@ class ClientProc(MsgMixin):
         msg['type'] = 'future'
 
         try:
-            msg['size'] = size = os.stat(msg['path']).st_size
+            msg['size'] = os.stat(msg['path']).st_size
             offset = msg.get('offset', 0)
             with open(msg['path'], 'rb') as f:
                 if offset:
                     f.seek(offset)
-                data = f.read(100*1024*1024)
+                data = f.read(100 * 1024 * 1024)
             msg['data'] = data
         except Exception:
             log_error('Exception handling msg in handle_syncdir_get_file:', msg)

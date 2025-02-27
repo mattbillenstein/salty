@@ -279,7 +279,7 @@ class SaltyServer(gevent.server.StreamServer, MsgMixin):
 
             gevent.joinall(greenlets)
 
-        except Exception as e:
+        except Exception:
             log_error('Exception handling msg in handle_apply:', msg)
             tb = traceback.format_exc().strip()
             log(tb)

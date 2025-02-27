@@ -150,15 +150,14 @@ class EncryptedSocket:
     def __init__(self, sock, password):
         self.sock = sock
         self.buf = b''
-        self.box = crypto._secretbox(password)
+        self.box = crypto.make_secretbox(password)
 
         self.connect = self.sock.connect
         self.close = self.sock.close
         self.getpeername = self.sock.getpeername
 
     def sendall(self, data):
-        data = self.box.encrypt(data, crypto._secretbox_nonce())
-        # FIXME, encrypt message size?
+        data = self.box.encrypt(data)
         data = struct.pack('!I', len(data)) + data
         self.sock.sendall(data)
 
