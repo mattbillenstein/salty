@@ -138,7 +138,7 @@ class ClientProc(MsgMixin):
             with open(msg['path'], 'rb') as f:
                 if offset:
                     f.seek(offset)
-                data = f.read(100 * 1024 * 1024)
+                data = f.read(10 * 1024 * 1024)
             msg['data'] = data
         except Exception:
             log_error('Exception handling msg in handle_syncdir_get_file:', msg)
